@@ -1,0 +1,12 @@
+# Secrets
+hello.txt
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# System
+.DS_Storehello.txt

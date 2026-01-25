@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Welcome View Gradient - matches Swift LinearGradient */
+.welcome-gradient {
+  background: linear-gradient(
+    to bottom,
+    rgb(242, 235, 255),  /* Color(red: 0.95, green: 0.92, blue: 1.0) */
+    rgb(230, 242, 255),  /* Color(red: 0.9, green: 0.95, blue: 1.0) */
+    rgb(217, 247, 255)   /* Color(red: 0.85, green: 0.97, blue: 1.0) */
+  );
+  min-height: 100vh;
+  min-height: 100svh; /* for mobile browsers */
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 0.75rem; /* padding(.top, 40) */
+}
+
+/* Modern Button Styling - matches Swift ModernButtonStyle */
+.modern-button {
+  padding: 0.875rem 2rem;
+  width: 100%;
+  max-width: 280px;
+  border-radius: 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: white;
+  border: 1.5px solid rgba(128, 128, 128, 0.5);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.1s ease-in-out, opacity 0.1s ease-in-out;
+  cursor: pointer;
+  position: relative;
+  margin: 0;
+}
+
+.modern-button + .modern-button {
+  margin-top: 0.75rem;
+}
+
+.modern-button-blue {
+  background-color: rgba(0, 122, 255, 0.65);
+}
+
+.modern-button-purple {
+  background-color: rgba(175, 82, 222, 0.65);
+}
+
+.modern-button:hover {
+  transform: scale(1.02);
+}
+
+.modern-button:active {
+  opacity: 0.4;
+  transform: scale(0.97);
+}
