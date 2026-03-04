@@ -1,8 +1,20 @@
 import SwiftUI
 
-// Bulb Visual
+// MARK: - Bulb Visual
+// Renders the strip icon tinted between warm amber and cool white
 struct BulbVisualView: View {
     let state: BulbState
+    
+    /// Colour interpolated between warm white (amber) and cool white
+    private var bulbColour: Color {
+        // colourTemp: 255 = warm amber, 0 = cool white
+        // t=0 at full warm, t=1 at full cool
+        let t = 1.0 - (Double(state.colourTemp) / 255.0)
+        let r = 1.0
+        let g = 0.75 + 0.25 * t   // warm = more amber (0.75), cool = bright white (1.0)
+        let b = 0.4 + 0.6 * t     // warm = low blue (0.4), cool = full white (1.0)
+        return Color(red: r, green: g, blue: b)
+    }
     
     var body: some View {
         ZStack {
@@ -11,7 +23,7 @@ struct BulbVisualView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: Double(state.red) / 255.0, green: Double(state.green) / 255.0, blue: Double(state.blue) / 255.0).opacity(0.6),
+                                bulbColour.opacity(0.6),
                                 Color.clear
                             ],
                             center: .center,
@@ -26,36 +38,16 @@ struct BulbVisualView: View {
             Image(systemName: state.power ? "lightbulb.fill" : "lightbulb")
                 .font(.system(size: 100))
                 .foregroundColor(
-                    state.power ?
-                    Color(red: Double(state.red) / 255.0, green: Double(state.green) / 255.0, blue: Double(state.blue) / 255.0).opacity(Double(state.brightness) / 255.0) : .gray
+                    state.power
+                    ? bulbColour.opacity(Double(state.brightness) / 255.0)
+                    : .gray
                 )
         }
         .animation(.easeInOut(duration: 0.3), value: state.power)
     }
 }
 
-// Quick Color Button
-struct QuickColorButton: View {
-    let color: Color
-    let label: String
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 5) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 40, height: 40)
-                    .overlay(Circle().stroke(Color.gray.opacity(0.3), lineWidth: 2))
-                Text(label)
-                    .font(.caption)
-                    .foregroundColor(.primary)
-            }
-        }
-    }
-}
-
-// Effect Button
+// MARK: - Effect Button
 struct EffectButton: View {
     let title: String
     let icon: String
