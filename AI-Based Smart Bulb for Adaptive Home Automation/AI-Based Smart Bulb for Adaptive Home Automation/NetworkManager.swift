@@ -24,33 +24,34 @@ class NetworkManager {
     
     private init() {}
     
-    // Check if server is reachable
+    // MARK: - Health Check
+    // Uses the dedicated /health endpoint — no DB queries, no side-effects.
+    // A real 200 response means the server is up; anything else (timeout,
+    // connection refused, non-200) means it is down.
     func checkServerHealth(completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "\(APIConfig.baseURL)/check_email") else {
-            completion(false)
+        guard let url = URL(string: "\(APIConfig.baseURL)/health") else {
+            DispatchQueue.main.async { completion(false) }
             return
         }
         
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 3.0 // Short timeout for health check
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": "health@check.com"])
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpMethod = "GET"
+        request.timeoutInterval = 4.0
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        URLSession.shared.dataTask(with: request) { _, response, error in
             DispatchQueue.main.async {
-                if let httpResponse = response as? HTTPURLResponse {
-                    // Server responded (even with error status means it's available)
-                    completion(true)
-                } else {
-                    // No response means server is down
+                guard error == nil,
+                      let http = response as? HTTPURLResponse,
+                      http.statusCode == 200 else {
                     completion(false)
+                    return
                 }
+                completion(true)
             }
         }.resume()
     }
     
-    // Generic POST request with error handling
+    // MARK: - Generic POST
     func post(
         endpoint: String,
         body: [String: Any],
@@ -69,27 +70,26 @@ class NetworkManager {
         
         URLSession.shared.dataTask(with: request) { data, response, error in
             DispatchQueue.main.async {
-                // Check for connection errors
+                // Connection-level errors → treat as server unavailable
                 if let error = error as NSError? {
                     if error.domain == NSURLErrorDomain &&
                        (error.code == NSURLErrorCannotConnectToHost ||
                         error.code == NSURLErrorCannotFindHost ||
-                        error.code == NSURLErrorTimedOut) {
+                        error.code == NSURLErrorTimedOut ||
+                        error.code == NSURLErrorNetworkConnectionLost ||
+                        error.code == NSURLErrorNotConnectedToInternet) {
                         completion(.failure(.serverUnavailable))
                         return
                     }
                 }
                 
-                // Check for HTTP response
                 guard let httpResponse = response as? HTTPURLResponse else {
                     completion(.failure(.serverUnavailable))
                     return
                 }
                 
-                // Parse response data
                 if let data = data,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    
                     if httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 {
                         completion(.success(json))
                     } else {

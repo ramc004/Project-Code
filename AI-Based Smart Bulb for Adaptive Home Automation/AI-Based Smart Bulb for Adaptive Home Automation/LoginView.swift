@@ -1,221 +1,233 @@
 import SwiftUI
 
 struct LoginView: View {
-  @State private var email = ""
-  @State private var password = ""
-  @State private var showPassword = false
-  @State private var emailValid = true
-  @State private var passwordValid = true
-  @State private var errorMessage = ""
-  @State private var loginMessage = ""
-  @State private var loggingIn = false
-  @State private var serverOnline = true
-  @State private var showServerAlert = false
+    @State private var email = ""
+    @State private var password = ""
+    @State private var showPassword = false
+    @State private var emailValid = true
+    @State private var passwordValid = true
+    @State private var errorMessage = ""
+    @State private var loginMessage = ""
+    @State private var loggingIn = false
+    @State private var serverOnline = true
+    @State private var showServerAlert = false
 
-  @State private var showResetPassword = false
-  @State private var resetCode = ""
-  @State private var navigateToHome = false
+    @State private var showResetPassword = false
+    @State private var resetCode = ""
+    @State private var navigateToHome = false
 
-  var body: some View {
-      ScrollView {
-          VStack(alignment: .leading, spacing: 20) {
-              Text("Login")
-                  .font(.largeTitle)
-                  .bold()
-              
-              // Server Status Indicator
-              if !serverOnline {
-                  HStack(spacing: 10) {
-                      Image(systemName: "exclamationmark.triangle.fill")
-                          .foregroundColor(.red)
-                      VStack(alignment: .leading, spacing: 4) {
-                          Text("Server Offline")
-                              .font(.subheadline)
-                              .bold()
-                              .foregroundColor(.red)
-                          Text("Please start the Flask server on your Mac")
-                              .font(.caption)
-                              .foregroundColor(.gray)
-                      }
-                      Spacer()
-                      Button("Retry") {
-                          checkServerStatus()
-                      }
-                      .font(.caption)
-                      .padding(.horizontal, 12)
-                      .padding(.vertical, 6)
-                      .background(Color.blue)
-                      .foregroundColor(.white)
-                      .cornerRadius(8)
-                  }
-                  .padding()
-                  .background(Color.red.opacity(0.1))
-                  .cornerRadius(10)
-              }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Login")
+                    .font(.largeTitle)
+                    .bold()
 
-              VStack(alignment: .leading) {
-                  Text("Email").font(.headline)
-                  TextField("Enter your email", text: $email)
-                      .textFieldStyle(RoundedBorderTextFieldStyle())
-                      .autocapitalization(.none)
-                      .keyboardType(.emailAddress)
-                      .onChange(of: email) { _ in
-                          emailValid = true
-                          errorMessage = ""
-                          loginMessage = ""
-                      }
-                      .disabled(!serverOnline)
-              }
+                // ── Server Offline Banner ──────────────────────────────────
+                if !serverOnline {
+                    HStack(spacing: 12) {
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 22))
+                            .foregroundColor(.white)
 
-              VStack(alignment: .leading) {
-                  Text("Password").font(.headline)
-                  HStack {
-                      if showPassword {
-                          TextField("Enter password", text: $password)
-                      } else {
-                          SecureField("Enter password", text: $password)
-                      }
-                      Button(action: { showPassword.toggle() }) {
-                          Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
-                              .foregroundColor(.gray)
-                      }
-                  }
-                  .textFieldStyle(RoundedBorderTextFieldStyle())
-                  .onChange(of: password) { _ in
-                      passwordValid = true
-                      errorMessage = ""
-                  }
-                  .disabled(!serverOnline)
-              }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Server is switched off")
+                                .font(.subheadline).bold()
+                                .foregroundColor(.white)
+                            Text("Start the Flask server on your Mac, then tap Retry.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+                        }
 
-              if !errorMessage.isEmpty {
-                  Text(errorMessage)
-                      .foregroundColor(.red)
-                      .bold()
-                      .padding()
-                      .frame(maxWidth: .infinity)
-                      .background(Color.red.opacity(0.1))
-                      .cornerRadius(8)
-              }
+                        Spacer()
 
-              if !loginMessage.isEmpty {
-                  Text(loginMessage)
-                      .foregroundColor(.green)
-                      .bold()
-                      .padding()
-                      .frame(maxWidth: .infinity)
-                      .background(Color.green.opacity(0.1))
-                      .cornerRadius(8)
-              }
+                        Button(action: checkServerStatus) {
+                            Text("Retry")
+                                .font(.subheadline).bold()
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 7)
+                                .background(Color.white)
+                                .foregroundColor(.red)
+                                .cornerRadius(8)
+                        }
+                    }
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.red.opacity(0.85))
+                    )
+                    .shadow(color: Color.red.opacity(0.25), radius: 6, x: 0, y: 3)
+                }
 
-              Button(action: loginUser) {
-                  Text(loggingIn ? "Logging in..." : "Login").frame(maxWidth: .infinity)
-              }
-              .buttonStyle(ModernButtonStyle(backgroundColor: .blue))
-              .disabled(loggingIn || !serverOnline)
-              .padding(.top, 20)
+                // ── Email ──────────────────────────────────────────────────
+                VStack(alignment: .leading) {
+                    Text("Email").font(.headline)
+                    TextField("Enter your email", text: $email)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .autocapitalization(.none)
+                        .keyboardType(.emailAddress)
+                        .onChange(of: email) { _ in
+                            emailValid    = true
+                            errorMessage  = ""
+                            loginMessage  = ""
+                        }
+                        .disabled(!serverOnline)
+                        .opacity(serverOnline ? 1.0 : 0.5)
+                }
 
-              Button(action: initiateForgotPassword) {
-                  Text("Forgot Password?").foregroundColor(.red).underline()
-              }
-              .padding(.top, 10)
-              .disabled(!serverOnline)
+                // ── Password ───────────────────────────────────────────────
+                VStack(alignment: .leading) {
+                    Text("Password").font(.headline)
+                    HStack {
+                        if showPassword {
+                            TextField("Enter password", text: $password)
+                        } else {
+                            SecureField("Enter password", text: $password)
+                        }
+                        Button(action: { showPassword.toggle() }) {
+                            Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onChange(of: password) { _ in
+                        passwordValid = true
+                        errorMessage  = ""
+                    }
+                    .disabled(!serverOnline)
+                    .opacity(serverOnline ? 1.0 : 0.5)
+                }
 
-              NavigationLink("", destination: ResetPasswordView(email: email, verificationCode: resetCode, loginMessage: $loginMessage), isActive: $showResetPassword)
-              NavigationLink("", destination: HomeView(), isActive: $navigateToHome)
-          }
-          .padding()
-      }
-      .navigationTitle("Login")
-      .onAppear {
-          checkServerStatus()
-      }
-      .alert("Server Connection Required", isPresented: $showServerAlert) {
-          Button("OK", role: .cancel) {}
-          Button("Retry") {
-              checkServerStatus()
-          }
-      } message: {
-          Text("Cannot connect to the server. Please make sure the Flask server is running on your Mac at \(APIConfig.baseURL)")
-      }
-  }
-  
-  func checkServerStatus() {
-      NetworkManager.shared.checkServerHealth { isOnline in
-          serverOnline = isOnline
-          if !isOnline {
-              errorMessage = "Server is offline. Please start the Flask server."
-          } else {
-              errorMessage = ""
-          }
-      }
-  }
+                // ── Inline messages (only when server is ON) ───────────────
+                if !errorMessage.isEmpty && serverOnline {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .bold()
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+                }
 
-  func loginUser() {
-      loginMessage = ""
-      errorMessage = ""
+                if !loginMessage.isEmpty {
+                    Text(loginMessage)
+                        .foregroundColor(.green)
+                        .bold()
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(8)
+                }
 
-      if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          emailValid = false
-          errorMessage = "Email cannot be empty."
-          return
-      }
+                // ── Login Button ───────────────────────────────────────────
+                Button(action: loginUser) {
+                    Text(loggingIn ? "Logging in…" : "Login").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(ModernButtonStyle(backgroundColor: .blue))
+                .disabled(loggingIn || !serverOnline)
+                .padding(.top, 20)
 
-      if password.isEmpty {
-          passwordValid = false
-          errorMessage = "Password cannot be empty."
-          return
-      }
-      
-      guard serverOnline else {
-          errorMessage = "Cannot login - server is offline"
-          showServerAlert = true
-          return
-      }
-      
-      loggingIn = true
+                // ── Forgot Password ────────────────────────────────────────
+                Button(action: initiateForgotPassword) {
+                    Text("Forgot Password?").foregroundColor(.red).underline()
+                }
+                .padding(.top, 10)
+                .disabled(!serverOnline)
 
-      NetworkManager.shared.post(endpoint: "/login", body: ["email": email, "password": password]) { result in
-          loggingIn = false
-          
-          switch result {
-          case .success(_):
-              // Store email locally for session management
-              UserDefaults.standard.set(email, forKey: "currentUserEmail")
-              UserDefaults.standard.set(true, forKey: "isLoggedIn")
-              navigateToHome = true
-              
-          case .failure(let error):
-              if case .serverUnavailable = error {
-                  serverOnline = false
-                  showServerAlert = true
-              } else if case .requestFailed(let message) = error {
-                  if message.contains("not registered") {
-                      errorMessage = "This email has not been registered. Please register first."
-                  } else if message.contains("password") {
-                      errorMessage = "Incorrect password. Please try again."
-                  } else {
-                      errorMessage = message
-                  }
-              } else {
-                  errorMessage = error.userMessage
-              }
-          }
-      }
-  }
+                NavigationLink(
+                    "",
+                    destination: ResetPasswordView(email: email, verificationCode: resetCode, loginMessage: $loginMessage),
+                    isActive: $showResetPassword
+                )
+                NavigationLink("", destination: HomeView(), isActive: $navigateToHome)
+            }
+            .padding()
+        }
+        .navigationTitle("Login")
+        .onAppear { checkServerStatus() }
+        .alert("Server Connection Required", isPresented: $showServerAlert) {
+            Button("OK", role: .cancel) {}
+            Button("Retry") { checkServerStatus() }
+        } message: {
+            Text("Cannot connect to the server. Please make sure the Flask server is running at \(APIConfig.baseURL).")
+        }
+    }
 
-    func initiateForgotPassword() {
-        if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorMessage = "Please enter your email address first."
+    // MARK: - Server Health
+    func checkServerStatus() {
+        NetworkManager.shared.checkServerHealth { isOnline in
+            serverOnline = isOnline
+            if isOnline {
+                errorMessage = ""
+            } else {
+                // Wipe any stale error so the banner is the sole message
+                errorMessage = ""
+            }
+        }
+    }
+
+    // MARK: - Login
+    func loginUser() {
+        loginMessage = ""
+        errorMessage = ""
+
+        guard !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            emailValid   = false
+            errorMessage = "Email cannot be empty."
             return
         }
-        
+        guard !password.isEmpty else {
+            passwordValid = false
+            errorMessage  = "Password cannot be empty."
+            return
+        }
         guard serverOnline else {
-            errorMessage = "Cannot reset password - server is offline"
             showServerAlert = true
             return
         }
-        
+
+        loggingIn = true
+
+        NetworkManager.shared.post(endpoint: "/login", body: ["email": email, "password": password]) { result in
+            loggingIn = false
+            switch result {
+            case .success:
+                UserDefaults.standard.set(email, forKey: "currentUserEmail")
+                UserDefaults.standard.set(true,  forKey: "isLoggedIn")
+                navigateToHome = true
+
+            case .failure(let error):
+                switch error {
+                case .serverUnavailable:
+                    serverOnline  = false
+                    errorMessage  = ""
+                    showServerAlert = true
+                case .requestFailed(let message):
+                    if message.contains("not registered") {
+                        errorMessage = "This email hasn't been registered. Please register first."
+                    } else if message.lowercased().contains("password") {
+                        errorMessage = "Incorrect password. Please try again."
+                    } else {
+                        errorMessage = message
+                    }
+                default:
+                    errorMessage = error.userMessage
+                }
+            }
+        }
+    }
+
+    // MARK: - Forgot Password
+    func initiateForgotPassword() {
+        guard !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "Please enter your email address first."
+            return
+        }
+        guard serverOnline else {
+            showServerAlert = true
+            return
+        }
+
         NetworkManager.shared.post(endpoint: "/check_email", body: ["email": email]) { result in
             switch result {
             case .success(let json):
@@ -224,30 +236,30 @@ struct LoginView: View {
                         errorMessage = "This email is not registered."
                         return
                     }
-                    
-                    // Email exists, send reset code
                     resetCode = String(format: "%06d", Int.random(in: 0...999999))
-                    
                     NetworkManager.shared.post(endpoint: "/send_code", body: ["email": email, "code": resetCode]) { sendResult in
                         switch sendResult {
-                        case .success(_):
+                        case .success:
                             showResetPassword = true
                         case .failure(let error):
                             if case .serverUnavailable = error {
-                                serverOnline = false
+                                serverOnline  = false
+                                errorMessage  = ""
                                 showServerAlert = true
+                            } else {
+                                errorMessage = error.userMessage
                             }
-                            errorMessage = error.userMessage
                         }
                     }
                 }
-                
             case .failure(let error):
                 if case .serverUnavailable = error {
-                    serverOnline = false
+                    serverOnline  = false
+                    errorMessage  = ""
                     showServerAlert = true
+                } else {
+                    errorMessage = error.userMessage
                 }
-                errorMessage = error.userMessage
             }
         }
     }

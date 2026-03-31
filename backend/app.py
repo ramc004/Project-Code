@@ -58,6 +58,14 @@ def hash_password(password):
 def verify_password(stored_hash, provided_password):
     return stored_hash == hash_password(provided_password)
 
+# ─────────────────────────────────────────────
+# NEW: Simple health check – no DB, no side effects
+# ─────────────────────────────────────────────
+@app.route('/health', methods=['GET', 'POST'])
+def health():
+    return jsonify({'status': 'ok'}), 200
+
+
 # Send a six digit verification code to the user
 @app.route('/send_code', methods=['POST'])
 def send_code():
@@ -223,7 +231,7 @@ def login():
             print(f"Login successful: {email}")
             return jsonify({'status': 'success', 'message': 'Login successful'})
         else:
-            print(f"Login failed: incorrect password for {email}")
+            print(f"Login failed: wrong password for {email}")
             return jsonify({'status': 'error', 'message': 'Incorrect password'}), 401
     
     except Exception as e:
@@ -279,7 +287,7 @@ def add_bulb():
     bulb_id = data.get('bulb_id', '').strip()
     bulb_name = data.get('bulb_name', '').strip()
     room_name = data.get('room_name', '').strip()
-    is_simulated = data.get('is_simulated', False)  # NEW
+    is_simulated = data.get('is_simulated', False)
     
     print(f"Adding bulb '{bulb_name}' for {user_email} (simulated: {is_simulated})")
     
@@ -321,7 +329,7 @@ def add_bulb():
 def get_bulbs():
     data = request.get_json()
     user_email = data.get('email', '').strip()
-    simulator_mode = data.get('simulator_mode', True)  # Filter based on mode
+    simulator_mode = data.get('simulator_mode', True)
     
     if not user_email:
         return jsonify({'status': 'error', 'message': 'Email is required'}), 400
@@ -330,7 +338,6 @@ def get_bulbs():
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
         
-        # Choose real or simulated bulbs based on mode
         if simulator_mode:
             query = '''SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated 
                       FROM bulbs WHERE user_email = ? AND is_simulated = 1 
@@ -399,7 +406,6 @@ def update_bulb():
         
         params.extend([user_email, bulb_id])
 
-        # Build the update statement dynamically
         query = f"UPDATE bulbs SET {', '.join(updates)} WHERE user_email = ? AND bulb_id = ?"
         c.execute(query, params)
         
@@ -446,7 +452,7 @@ def delete_bulb():
         print(f"Delete bulb error: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to delete bulb'}), 500
 
-# Delete a bulb from the user account
+
 if __name__ == "__main__":
     init_db()
     print("\n" + "="*50)
