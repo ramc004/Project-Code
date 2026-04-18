@@ -30,7 +30,7 @@ struct RegisterEmailView: View {
                             Text("Server is switched off")
                                 .font(.subheadline).bold()
                                 .foregroundColor(.white)
-                            Text("Start the Flask server on your Mac, then tap Retry.")
+                            Text("Please tap Retry.")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.85))
                         }
@@ -75,7 +75,7 @@ struct RegisterEmailView: View {
                     Text(domainValid   ? "✅ Domain is valid"             : "❌ Invalid domain (e.g., example.com)")
 
                     if !serverOnline {
-                        Label("Server offline — availability check skipped", systemImage: "exclamationmark.triangle.fill")
+                        Label("Server offline - availability check skipped", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundColor(.orange)
                     } else if checkingEmail {
@@ -123,7 +123,7 @@ struct RegisterEmailView: View {
             Button("OK", role: .cancel) {}
             Button("Retry") { checkServerStatus() }
         } message: {
-            Text("Cannot connect to the server. Please make sure the Flask server is running at \(APIConfig.baseURL).")
+            Text("Cannot connect to the server. Please retry \(APIConfig.baseURL).")
         }
     }
 
