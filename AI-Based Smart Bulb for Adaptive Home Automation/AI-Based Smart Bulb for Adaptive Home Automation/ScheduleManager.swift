@@ -161,7 +161,11 @@ class ScheduleManager: NSObject, ObservableObject {
     // SavedBulbControlView registers its BLEManager here so ScheduleManager
     // can drive BLE directly — whether the app is foregrounded or the
     // notification fires while the control view is on screen.
-    private weak var activeBLEManager: BLEManager?
+    //
+    // Strong (not weak) so the BLEManager survives after the view disappears
+    // (e.g. screen locks, app backgrounds) and scheduled power-off commands
+    // can still be delivered via BLE when the notification fires.
+    private var activeBLEManager: BLEManager?
     private var activeBulbId: String?
 
     func registerActiveBLEManager(_ manager: BLEManager, for bulbId: String) {
@@ -171,10 +175,27 @@ class ScheduleManager: NSObject, ObservableObject {
     }
 
     func unregisterActiveBLEManager(for bulbId: String) {
+        // Only clear the reference if BLE is no longer connected.
+        // This keeps the manager alive so scheduled power-off commands
+        // can fire via BLE even after the control view has disappeared
+        // (screen locked, app backgrounded, user navigated away).
+        guard activeBulbId == bulbId else { return }
+        if activeBLEManager?.connectedBulb == nil {
+            activeBLEManager = nil
+            activeBulbId = nil
+            print("📡 ScheduleManager: unregistered BLEManager for bulb \(bulbId) (disconnected)")
+        } else {
+            print("📡 ScheduleManager: kept BLEManager for bulb \(bulbId) (still connected — schedules can still fire)")
+        }
+    }
+
+    /// Call this when BLE fully disconnects (e.g. peripheral disconnect delegate).
+    /// Clears the reference unconditionally.
+    func forceUnregisterActiveBLEManager(for bulbId: String) {
         if activeBulbId == bulbId {
             activeBLEManager = nil
             activeBulbId = nil
-            print("📡 ScheduleManager: unregistered BLEManager for bulb \(bulbId)")
+            print("📡 ScheduleManager: force-unregistered BLEManager for bulb \(bulbId)")
         }
     }
 
@@ -256,7 +277,7 @@ class ScheduleManager: NSObject, ObservableObject {
     func executeSchedule(_ schedule: BulbSchedule) {
         guard let ble = activeBLEManager,
               activeBulbId == schedule.bulbId else {
-            print("⚠️ ScheduleManager: no active BLEManager for bulb \(schedule.bulbId) — cannot fire '\(schedule.scheduleName)'")
+            print("⚠️ ScheduleManager: cannot fire '\(schedule.scheduleName)' — activeBulbId='\(activeBulbId ?? "nil")' schedule.bulbId='\(schedule.bulbId)' bleManager=\(activeBLEManager == nil ? "nil" : "present")")
             // Still post so any on-screen view can react
             NotificationCenter.default.post(name: .scheduleTriggered, object: nil,
                                             userInfo: ["schedule": schedule])

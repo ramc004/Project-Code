@@ -61,7 +61,7 @@ struct SavedBulbControlView: View {
 
                         // ── Header ──────────────────────────────────────────
                         HStack {
-                            Button(action: { dismiss() }) {
+                            Button(action: { bleManager.disconnect(); dismiss() }) {
                                 Image(systemName: "arrow.left")
                                     .font(.system(size: 20, weight: .bold))
                             }
@@ -317,8 +317,12 @@ struct SavedBulbControlView: View {
             ScheduleManager.shared.loadSchedules(for: savedBulb.bulb_id)
         }
         .onDisappear {
-            ScheduleManager.shared.unregisterActiveBLEManager(for: savedBulb.bulb_id)
-            bleManager.disconnect()
+            // Do NOT disconnect BLE or unregister here.
+            // Keeping the connection alive means:
+            //  (a) The ESP32 autonomous engine already has schedules in flash and fires them independently.
+            //  (b) If the notification fires while the app is foregrounded (e.g. user on HomeView),
+            //      executeSchedule can still send the BLE command directly.
+            // BLE is disconnected only when the user explicitly leaves via the back button (see dismiss() calls).
         }
         // UI sync when a schedule fires (BLE already sent by ScheduleManager.executeSchedule)
         .onReceive(NotificationCenter.default.publisher(for: .scheduleTriggered)) { notif in
@@ -326,12 +330,18 @@ struct SavedBulbControlView: View {
                   schedule.bulbId == savedBulb.bulb_id else { return }
             syncUIState(from: schedule)
         }
-        // Register BLE manager the moment the peripheral connects (real hardware path)
+        // When BLE connects: register BLEManager and immediately reload+push schedules to ESP32 flash.
+        // This guarantees the ESP32 autonomous engine has the latest schedule list even if
+        // loadSchedules completed before the BLE connection was established (race condition).
+        // When BLE disconnects: force-unregister so executeSchedule doesn't try a dead connection.
         .onReceive(bleManager.$connectedBulb) { connectedBulb in
             if connectedBulb != nil {
                 ScheduleManager.shared.registerActiveBLEManager(bleManager, for: savedBulb.bulb_id)
+                // Re-push schedules now that BLE is confirmed live.
+                // loadSchedules completion handler calls pushAllSchedules automatically.
+                ScheduleManager.shared.loadSchedules(for: savedBulb.bulb_id)
             } else {
-                ScheduleManager.shared.unregisterActiveBLEManager(for: savedBulb.bulb_id)
+                ScheduleManager.shared.forceUnregisterActiveBLEManager(for: savedBulb.bulb_id)
             }
         }
     }

@@ -125,6 +125,10 @@ void loadAllSchedulesFromFlash() {
   }
 
   prefs.end();
+
+  int count = 0;
+  for (int i = 0; i < MAX_SCHEDULES; i++) if (schedules[i].valid && schedules[i].enabled) count++;
+  Serial.printf("Schedules loaded from flash: %d enabled slot(s)\n", count);
 }
 
 void clearAllSchedulesFromFlash() {
@@ -224,6 +228,8 @@ void executeAction(int slot) {
 void checkSchedules() {
   // Convert weekday (1=Mon..7=Sun) to bitmask bit position (bit0=Mon)
   uint8_t dayBit = (uint8_t)(1 << (clockWeekday - 1));
+  Serial.printf("⏱ Tick %02d:%02d weekday=%d dayBit=0x%02X\n",
+                clockHour, clockMinute, clockWeekday, dayBit);
 
   for (int i = 0; i < MAX_SCHEDULES; i++) {
     if (!schedules[i].valid || !schedules[i].enabled) continue;
@@ -250,10 +256,13 @@ void tickClock() {
   if (clockSecond >= 60) {
     clockSecond = 0;
     clockMinute++;
-    // Reset all lastFiredMinute sentinels at each new minute
+    // Reset lastFiredMinute sentinels so each schedule can fire once per
+    // matching minute. Clear only slots that fired in a *different* minute,
+    // so a time-sync that nudges the clock back a few seconds into the same
+    // minute cannot cause an immediate double-fire.
     for (int i = 0; i < MAX_SCHEDULES; i++) {
-      if (lastFiredMinute[i] != 255 && lastFiredMinute[i] != clockMinute) {
-        // Keep the value so we don't re-fire if we roll back same minute on re-sync
+      if (lastFiredMinute[i] != clockMinute) {
+        lastFiredMinute[i] = 255; // 255 = "not yet fired this minute"
       }
     }
     if (clockMinute >= 60) {

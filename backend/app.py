@@ -516,34 +516,62 @@ def sync_sleep():
 
 
 def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
-    """Create wind-down and wake-up schedule suggestions from sleep data."""
-    try:
-        # Parse ISO strings like "2025-04-18T22:30:00"
-        sleep_dt = datetime.fromisoformat(sleep_start_iso[:19])
-        wake_dt = datetime.fromisoformat(wake_time_iso[:19])
+    """Create wind-down and wake-up schedule suggestions from sleep data.
 
-        # Wind-down: 15 mins before bedtime
+    Confidence scales with how many nights of data exist (max 0.75).
+    A single night is weak signal — the user's bedtime varies day to day.
+    After ~2 weeks of consistent data the suggestion becomes fairly reliable,
+    but we never claim certainty since sleep schedules shift with life events.
+
+      nights:  1 → 0.42,  3 → 0.50,  7 → 0.62,  14 → 0.72,  21+ → 0.75
+    """
+    import math
+    try:
+        sleep_dt = datetime.fromisoformat(sleep_start_iso[:19])
+        wake_dt  = datetime.fromisoformat(wake_time_iso[:19])
+
+        # Wind-down 15 min before bedtime; gentle wake 15 min before alarm
         wd = sleep_dt - timedelta(minutes=15)
-        # Wake-up: 15 mins before wake time
-        wu = wake_dt - timedelta(minutes=15)
+        wu = wake_dt  - timedelta(minutes=15)
 
         conn = get_db(); c = conn.cursor()
-        # Get first bulb for the user
+
         c.execute('SELECT bulb_id FROM bulbs WHERE user_email = ? LIMIT 1', (user_email,))
         row = c.fetchone()
         bulb_id = row[0] if row else 'demo-bulb-1'
 
-        for stype, dt, action, brightness, colour_temp, name in [
-            ('sleep_wind_down', wd, 'dim_warm', 40, 255, 'Wind-down dim'),
-            ('sleep_wake_up',   wu, 'brighten_cool', 200, 80, 'Gentle wake-up'),
+        # Count nights of sleep data in the last 30 days
+        c.execute('''
+            SELECT COUNT(*) FROM health_sleep_data
+            WHERE user_email = ?
+              AND recorded_at >= datetime('now', '-30 days')
+        ''', (user_email,))
+        nights = max(c.fetchone()[0] or 1, 1)
+
+        # Sigmoid-based scaling: honest at low counts, asymptotes at 0.75
+        sleep_confidence = min(round(0.75 / (1.0 + math.exp(-0.25 * (nights - 7))), 2), 0.75)
+
+        for stype, dt, action, brightness, colour_temp in [
+            ('sleep_wind_down', wd, 'dim_warm',       40,  255),
+            ('sleep_wake_up',   wu, 'brighten_cool', 200,   80),
         ]:
+            # Don't duplicate an existing pending suggestion at the same time
+            c.execute('''
+                SELECT id FROM schedule_suggestions
+                WHERE user_email=? AND bulb_id=? AND suggestion_type=?
+                  AND trigger_hour=? AND trigger_minute=? AND status='pending'
+            ''', (user_email, bulb_id, stype, dt.hour, dt.minute))
+            if c.fetchone():
+                continue
+
             c.execute('''
                 INSERT INTO schedule_suggestions
                 (user_email, bulb_id, suggestion_type, trigger_hour, trigger_minute,
                  action, brightness, colour_temp, confidence, observation_count, status)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ''', (user_email, bulb_id, stype, dt.hour, dt.minute,
-                  action, brightness, colour_temp, 0.95, 1, 'pending'))
+                  action, brightness, colour_temp, sleep_confidence, nights, 'pending'))
+
         conn.commit(); conn.close()
     except Exception as e:
         print(f"Sleep suggestion error: {e}")
@@ -555,23 +583,35 @@ def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
 @app.route('/analyse_usage', methods=['POST'])
 def analyse_usage():
     """
-    Simple sliding-window ML:
-    - Groups events by event_type + rounded hour (±30 min)
-    - Counts occurrences across days
-    - Computes confidence = occurrences / total_days_observed
-    - Emits suggestions for patterns with confidence >= 0.55
+    Multi-factor confidence model:
+
+      confidence = consistency × sample_weight × recency_weight
+
+      consistency   = distinct days this pattern fired / days the app was used
+                      (one event per day per bucket — duplicates collapsed so
+                       tapping the bulb 5 times in one evening doesn't inflate)
+      sample_weight = sigmoid ramp over distinct days of evidence:
+                      ~0.50 at 2 days, ~0.72 at 7, ~0.90 at 14, ~0.97 at 21
+      recency_weight= fraction of occurrences in the last 7 days, scaled
+                      0.70–1.00 (old stale patterns penalised, not zeroed)
+
+    Hard ceiling: 0.82  — real behaviour is never perfectly predictable
+    Minimum to surface: 0.40
     """
+    import math
+
     data = request.get_json()
     user_email = data.get('email', '').strip()
-    bulb_id = data.get('bulb_id', '').strip()
+    bulb_id    = data.get('bulb_id', '').strip()
     if not user_email or not bulb_id:
         return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
 
     conn = get_db(); c = conn.cursor()
 
-    # Last 28 days of events
+    # ── Fetch last 28 days of raw events ─────────────────────────────────────
     c.execute('''
-        SELECT event_type, hour_of_day, minute_of_day, power, brightness, colour_temp
+        SELECT event_type, hour_of_day, minute_of_day, brightness, colour_temp,
+               date(recorded_at), recorded_at
         FROM bulb_usage_events
         WHERE user_email = ? AND bulb_id = ?
           AND recorded_at >= datetime('now', '-28 days')
@@ -579,36 +619,62 @@ def analyse_usage():
     ''', (user_email, bulb_id))
     events = c.fetchall()
 
-    # Count distinct days in window
-    c.execute('''
-        SELECT COUNT(DISTINCT date(recorded_at))
-        FROM bulb_usage_events
-        WHERE user_email = ? AND bulb_id = ?
-          AND recorded_at >= datetime('now', '-28 days')
-    ''', (user_email, bulb_id))
-    total_days = max(c.fetchone()[0], 1)
+    # Days on which ANY event was logged — the true denominator
+    active_days       = set(row[5] for row in events)
+    total_active_days = max(len(active_days), 1)
 
-    # Bucket events into 30-min windows
-    buckets = defaultdict(list)
-    for ev_type, h, m, power, brightness, col in events:
-        # Round to nearest 30-min bucket
-        bucket_m = 0 if m < 30 else 30
-        key = (ev_type, h, bucket_m)
-        buckets[key].append({'brightness': brightness, 'colour_temp': col, 'power': power})
+    # ── Collapse to one entry per (event_type, hour, slot, date) ─────────────
+    # Prevents multiple taps in the same 30-min window on the same day from
+    # inflating frequency above 1.0 per day.
+    seen_day_buckets = set()
+    buckets          = defaultdict(list)
 
+    for ev_type, h, m, brightness, col, date_str, recorded_at in events:
+        slot    = 0 if m < 30 else 30
+        key     = (ev_type, h, slot)
+        day_key = (ev_type, h, slot, date_str)
+        if day_key in seen_day_buckets:
+            continue
+        seen_day_buckets.add(day_key)
+        buckets[key].append({
+            'brightness':  brightness,
+            'colour_temp': col,
+            'date':        date_str,
+            'recorded_at': recorded_at,
+        })
+
+    now_str           = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    week_ago_str      = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
     suggestions_created = 0
+
     for (ev_type, h, bm), entries in buckets.items():
-        confidence = len(entries) / total_days
-        if confidence < 0.55:
+        n = len(entries)   # distinct days this pattern fired
+
+        # ── Factor 1: consistency (naturally 0–1) ────────────────────────────
+        consistency = n / total_active_days
+
+        # ── Factor 2: sample weight via sigmoid ──────────────────────────────
+        # Ramps smoothly: 2 days ≈ 0.50, 7 ≈ 0.72, 14 ≈ 0.90, 21 ≈ 0.97
+        sample_weight = 1.0 / (1.0 + math.exp(-0.35 * (n - 7)))
+
+        # ── Factor 3: recency weight (0.70–1.00) ────────────────────────────
+        recent        = sum(1 for e in entries if e['recorded_at'] >= week_ago_str)
+        recency_ratio  = recent / n
+        recency_weight = 0.70 + 0.30 * recency_ratio
+
+        # ── Combine and cap ──────────────────────────────────────────────────
+        confidence = min(round(consistency * sample_weight * recency_weight, 2), 0.82)
+
+        if confidence < 0.40:
             continue
 
-        # Median brightness / colour_temp
-        brights = [e['brightness'] for e in entries if e['brightness'] is not None]
+        # ── Median settings ──────────────────────────────────────────────────
+        brights = [e['brightness']  for e in entries if e['brightness']  is not None]
         cols    = [e['colour_temp'] for e in entries if e['colour_temp'] is not None]
-        med_b = int(sorted(brights)[len(brights)//2]) if brights else 255
-        med_c = int(sorted(cols)[len(cols)//2]) if cols else 128
+        med_b   = int(sorted(brights)[len(brights) // 2]) if brights else 255
+        med_c   = int(sorted(cols)[len(cols) // 2])       if cols    else 128
 
-        # Determine action
+        # ── Determine action ─────────────────────────────────────────────────
         if ev_type == 'power_off':
             action = 'power_off'
         elif ev_type == 'power_on':
@@ -618,18 +684,14 @@ def analyse_usage():
         else:
             action = 'brightness_change'
 
-        # Window boundaries
-        w_start_h, w_start_m = (h, bm)
-        w_end_m = bm + 30
-        w_end_h = h
-        if w_end_m >= 60:
-            w_end_m -= 60; w_end_h += 1
-        trigger_m = bm + 15
-        trigger_h = h
-        if trigger_m >= 60:
-            trigger_m -= 60; trigger_h += 1
+        # ── Window + trigger time ────────────────────────────────────────────
+        w_start_h, w_start_m = h, bm
+        w_end_m = bm + 30;   w_end_h = h
+        if w_end_m >= 60:    w_end_m -= 60; w_end_h += 1
+        trigger_m = bm + 15; trigger_h = h
+        if trigger_m >= 60:  trigger_m -= 60; trigger_h += 1
 
-        # Don't duplicate existing pending suggestion
+        # ── Deduplicate ──────────────────────────────────────────────────────
         c.execute('''
             SELECT id FROM schedule_suggestions
             WHERE user_email=? AND bulb_id=? AND suggestion_type=?
@@ -648,12 +710,12 @@ def analyse_usage():
               trigger_h, trigger_m,
               w_start_h, w_start_m, w_end_h, w_end_m,
               action, med_b, med_c,
-              round(confidence, 2), len(entries), 'pending'))
+              confidence, n, 'pending'))
         suggestions_created += 1
 
     conn.commit(); conn.close()
     return jsonify({'status': 'success', 'suggestions_created': suggestions_created,
-                    'days_analysed': total_days, 'events_processed': len(events)})
+                    'days_analysed': total_active_days, 'events_processed': len(events)})
 
 
 # ─────────────────────────────────────────────────────────────

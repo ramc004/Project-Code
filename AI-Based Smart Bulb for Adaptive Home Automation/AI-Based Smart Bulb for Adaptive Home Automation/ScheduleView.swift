@@ -468,8 +468,8 @@ struct SuggestionCard: View {
     let onDismiss: () -> Void
 
     var confidenceColour: Color {
-        suggestion.confidence >= 0.8 ? Color(red: 0.2, green: 0.85, blue: 0.5) :
-        suggestion.confidence >= 0.65 ? Color(red: 1.0, green: 0.65, blue: 0.2) :
+        suggestion.confidence >= 0.68 ? Color(red: 0.2, green: 0.85, blue: 0.5) :
+        suggestion.confidence >= 0.52 ? Color(red: 1.0, green: 0.65, blue: 0.2) :
         Color(red: 1.0, green: 0.85, blue: 0.2)
     }
 
