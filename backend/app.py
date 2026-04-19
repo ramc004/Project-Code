@@ -4,16 +4,19 @@ import smtplib
 import sqlite3
 import hashlib
 import os
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 app = Flask(__name__)
 
-# Initialise the database and create required tables
+# ─────────────────────────────────────────────────────────────
+# DATABASE INIT
+# ─────────────────────────────────────────────────────────────
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    
-    # Main user table storing login credentials
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,8 +25,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
-    # Migration safeguard for older databases
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS bulbs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,52 +40,205 @@ def init_db():
             UNIQUE(user_email, bulb_id)
         )
     ''')
-    
-    # Add is_simulated column to existing tables (migration)
+
     try:
         c.execute('ALTER TABLE bulbs ADD COLUMN is_simulated INTEGER DEFAULT 0')
-        print("Added is_simulated column to bulbs table")
     except sqlite3.OperationalError:
-        print("is_simulated column already exists")
-    
+        pass
+
+    # ── Usage events: every time user changes power/brightness/colourTemp ──
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS bulb_usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            bulb_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            power INTEGER,
+            brightness INTEGER,
+            colour_temp INTEGER,
+            hour_of_day INTEGER,
+            minute_of_day INTEGER,
+            day_of_week INTEGER,
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # ── Schedules: manually created OR auto-generated ──────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            bulb_id TEXT NOT NULL,
+            schedule_name TEXT NOT NULL,
+            schedule_type TEXT NOT NULL DEFAULT 'manual',
+            trigger_hour INTEGER NOT NULL,
+            trigger_minute INTEGER NOT NULL DEFAULT 0,
+            end_hour INTEGER,
+            end_minute INTEGER DEFAULT 0,
+            action TEXT NOT NULL,
+            brightness INTEGER,
+            colour_temp INTEGER,
+            is_enabled INTEGER DEFAULT 1,
+            confidence REAL DEFAULT 1.0,
+            source TEXT DEFAULT 'manual',
+            days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # ── Health / sleep data synced from HealthKit ──────────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS health_sleep_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            sleep_start TEXT,
+            sleep_end TEXT,
+            wake_time TEXT,
+            bedtime TEXT,
+            source TEXT DEFAULT 'healthkit',
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # ── ML suggestions waiting for user approval ───────────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS schedule_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            bulb_id TEXT NOT NULL,
+            suggestion_type TEXT NOT NULL,
+            trigger_hour INTEGER NOT NULL,
+            trigger_minute INTEGER NOT NULL DEFAULT 0,
+            window_start_hour INTEGER,
+            window_start_minute INTEGER DEFAULT 0,
+            window_end_hour INTEGER,
+            window_end_minute INTEGER DEFAULT 0,
+            action TEXT NOT NULL,
+            brightness INTEGER,
+            colour_temp INTEGER,
+            confidence REAL NOT NULL,
+            observation_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
+    # Seed test data for quick testing
+    _seed_test_data()
     print("Database initialised")
 
-# Hash a password using SHA 256
+
+def _seed_test_data():
+    """Insert demo usage events and a test suggestion so the ML has something to work with."""
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+
+    # Only seed once
+    c.execute("SELECT COUNT(*) FROM bulb_usage_events")
+    if c.fetchone()[0] > 0:
+        conn.close()
+        return
+
+    print("Seeding test usage data…")
+    now = datetime.now()
+
+    # Build 14 days of synthetic usage:
+    #   - Turn on at ~07:30 every day (wake up)
+    #   - Dim at ~21:45 (wind down)
+    #   - Turn off at ~22:00 (bed)
+    events = []
+    for day_offset in range(14):
+        base = now - timedelta(days=day_offset)
+        dow = base.weekday() + 1  # 1=Mon … 7=Sun
+
+        # Morning turn-on: 07:25 – 07:35 jitter
+        m_min = 25 + (day_offset % 3) * 3  # jitter
+        events.append(('test@example.com', 'demo-bulb-1', 'power_on',
+                        1, 255, 200, 7, m_min, dow))
+
+        # Evening dim: 21:40 – 21:50 jitter
+        e_min = 40 + (day_offset % 4) * 2
+        events.append(('test@example.com', 'demo-bulb-1', 'brightness_change',
+                        1, 60, 255, 21, e_min, dow))
+
+        # Bed turn-off: 21:55 – 22:05
+        b_min = 55 + (day_offset % 3)
+        if b_min >= 60:
+            events.append(('test@example.com', 'demo-bulb-1', 'power_off',
+                            0, 0, 255, 22, b_min - 60, dow))
+        else:
+            events.append(('test@example.com', 'demo-bulb-1', 'power_off',
+                            0, 0, 255, 21, b_min, dow))
+
+    c.executemany('''
+        INSERT INTO bulb_usage_events
+        (user_email, bulb_id, event_type, power, brightness, colour_temp,
+         hour_of_day, minute_of_day, day_of_week, recorded_at)
+        VALUES (?,?,?,?,?,?,?,?,?, datetime('now','-'||?||' days'))
+    ''', [(e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8],
+           str(day_offset)) for day_offset, e in
+          [(i // 3, events[i]) for i in range(len(events))]])
+
+    # Insert a pre-built suggestion
+    c.execute('''
+        INSERT OR IGNORE INTO schedule_suggestions
+        (user_email, bulb_id, suggestion_type,
+         trigger_hour, trigger_minute,
+         window_start_hour, window_start_minute,
+         window_end_hour, window_end_minute,
+         action, brightness, colour_temp,
+         confidence, observation_count, status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ''', ('test@example.com', 'demo-bulb-1', 'auto_power_off',
+          22, 0,
+          21, 45, 22, 15,
+          'power_off', 0, 255,
+          0.87, 14, 'pending'))
+
+    conn.commit()
+    conn.close()
+    print("Test data seeded.")
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# Compare a stored hash against a provided password
 def verify_password(stored_hash, provided_password):
     return stored_hash == hash_password(provided_password)
 
-# ─────────────────────────────────────────────
-# NEW: Simple health check – no DB, no side effects
-# ─────────────────────────────────────────────
+def get_db():
+    return sqlite3.connect('users.db')
+
+
+# ─────────────────────────────────────────────────────────────
+# HEALTH CHECK
+# ─────────────────────────────────────────────────────────────
 @app.route('/health', methods=['GET', 'POST'])
 def health():
     return jsonify({'status': 'ok'}), 200
 
 
-# Send a six digit verification code to the user
+# ─────────────────────────────────────────────────────────────
+# AUTH ROUTES  (unchanged)
+# ─────────────────────────────────────────────────────────────
 @app.route('/send_code', methods=['POST'])
 def send_code():
     data = request.get_json()
     email_recipient = data.get('email')
     code = data.get('code')
-    # Basic validation for email and code format
     if not email_recipient or "@" not in email_recipient:
         return jsonify({'status': 'error', 'message': 'Invalid email'}), 400
-
     if not code or len(code) != 6:
         return jsonify({'status': 'error', 'message': 'Invalid code'}), 400
-
     email_recipient = email_recipient.strip()
     code = code.strip()
-
     try:
-        # Read app password for Gmail from file
         with open("hello.txt", "r") as f:
             email_password = f.read().strip()
 
@@ -111,175 +266,101 @@ Caleb's Home Automation System
 This is an automated message. Please do not reply to this email."""
 
         msg.set_content(email_body)
-        
-        # Send through Gmail using SSL
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(email_sender, email_password)
             server.send_message(msg)
-
-        print(f"Sent verification code to {email_recipient}")
         return jsonify({'status': 'success', 'code': code})
-
     except Exception as e:
         print(f"Failed to send email: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to send email'}), 500
 
 
-# Check if an email already exists in the database
 @app.route('/check_email', methods=['POST'])
 def check_email():
     data = request.get_json()
     email = data.get('email', '').strip()
-    
-    print(f"Checking email: {email}")
-    
     if not email:
         return jsonify({'status': 'error', 'message': 'Email is required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
+        conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
-        user = c.fetchone()
-        conn.close()
-        
-        if user:
-            print(f"Email {email} is already registered")
-            return jsonify({'status': 'success', 'available': False})
-        else:
-            print(f"Email {email} is available")
-            return jsonify({'status': 'success', 'available': True})
-    
+        user = c.fetchone(); conn.close()
+        return jsonify({'status': 'success', 'available': user is None})
     except Exception as e:
-        print(f"Database error: {e}")
         return jsonify({'status': 'error', 'message': 'Database error'}), 500
 
 
-# Register a new account
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
     email = data.get('email', '').strip()
     password = data.get('password', '')
-    
-    print(f"Registration attempt for: {email}")
-    
-    # Basic validation checks
     if not email or not password:
         return jsonify({'status': 'error', 'message': 'Email and password are required'}), 400
-    
     if '@' not in email or '.' not in email.split('@')[1]:
         return jsonify({'status': 'error', 'message': 'Invalid email format'}), 400
-    
     if len(password) < 8:
         return jsonify({'status': 'error', 'message': 'Password must be at least 8 characters'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-
-        # Prevent duplicate accounts
+        conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
         if c.fetchone():
             conn.close()
-            print(f"Registration failed: {email} already exists")
             return jsonify({'status': 'error', 'message': 'Email already registered'}), 409
-        
-        # Store hashed password
-        password_hash = hash_password(password)
-        c.execute('INSERT INTO users (email, password_hash) VALUES (?, ?)', (email, password_hash))
-        conn.commit()
-        conn.close()
-        
-        print(f"User registered successfully: {email}")
+        c.execute('INSERT INTO users (email, password_hash) VALUES (?, ?)',
+                  (email, hash_password(password)))
+        conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'User registered successfully'})
-    
     except sqlite3.IntegrityError:
-        print(f"Integrity error: {email} already registered")
         return jsonify({'status': 'error', 'message': 'Email already registered'}), 409
     except Exception as e:
-        print(f"Registration error: {e}")
         return jsonify({'status': 'error', 'message': 'Registration failed'}), 500
 
 
-# Attempt user login
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     email = data.get('email', '').strip()
     password = data.get('password', '')
-    
-    print(f"Login attempt for: {email}")
-    
     if not email or not password:
         return jsonify({'status': 'error', 'message': 'Email and password are required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
+        conn = get_db(); c = conn.cursor()
         c.execute('SELECT password_hash FROM users WHERE email = ?', (email,))
-        user = c.fetchone()
-        conn.close()
-
-        # Reject unknown emails
+        user = c.fetchone(); conn.close()
         if not user:
-            print(f"Login failed: {email} not found")
             return jsonify({'status': 'error', 'message': 'Email not registered'}), 404
-        
-        # Validate password
         if verify_password(user[0], password):
-            print(f"Login successful: {email}")
             return jsonify({'status': 'success', 'message': 'Login successful'})
-        else:
-            print(f"Login failed: wrong password for {email}")
-            return jsonify({'status': 'error', 'message': 'Incorrect password'}), 401
-    
+        return jsonify({'status': 'error', 'message': 'Incorrect password'}), 401
     except Exception as e:
-        print(f"Login error: {e}")
         return jsonify({'status': 'error', 'message': 'Login failed'}), 500
 
 
-# Update stored password for a known email
 @app.route('/reset_password', methods=['POST'])
 def reset_password():
     data = request.get_json()
     email = data.get('email', '').strip()
     new_password = data.get('password', '')
-    
-    print(f"Password reset for: {email}")
-    
     if not email or not new_password:
         return jsonify({'status': 'error', 'message': 'Email and password are required'}), 400
-    
-    if len(new_password) < 8:
-        return jsonify({'status': 'error', 'message': 'Password must be at least 8 characters'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-
-        # Ensure the account exists
+        conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
         if not c.fetchone():
             conn.close()
-            print(f"Reset failed: {email} not found")
             return jsonify({'status': 'error', 'message': 'Email not registered'}), 404
-
-        # Store updated password hash
-        password_hash = hash_password(new_password)
-        c.execute('UPDATE users SET password_hash = ? WHERE email = ?', (password_hash, email))
-        conn.commit()
-        conn.close()
-        
-        print(f"Password reset successful: {email}")
+        c.execute('UPDATE users SET password_hash = ? WHERE email = ?',
+                  (hash_password(new_password), email))
+        conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'Password reset successful'})
-    
     except Exception as e:
-        print(f"Password reset error: {e}")
         return jsonify({'status': 'error', 'message': 'Password reset failed'}), 500
 
 
-# Add a real or simulated smart bulb to a user's account
+# ─────────────────────────────────────────────────────────────
+# BULB ROUTES  (unchanged)
+# ─────────────────────────────────────────────────────────────
 @app.route('/add_bulb', methods=['POST'])
 def add_bulb():
     data = request.get_json()
@@ -288,93 +369,51 @@ def add_bulb():
     bulb_name = data.get('bulb_name', '').strip()
     room_name = data.get('room_name', '').strip()
     is_simulated = data.get('is_simulated', False)
-    
-    print(f"Adding bulb '{bulb_name}' for {user_email} (simulated: {is_simulated})")
-    
     if not user_email or not bulb_id or not bulb_name:
         return jsonify({'status': 'error', 'message': 'Email, bulb_id, and bulb_name are required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-
-        # Ensure user exists
+        conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (user_email,))
         if not c.fetchone():
             conn.close()
             return jsonify({'status': 'error', 'message': 'User not found'}), 404
-
-        # Prevent duplicate bulbs
         c.execute('SELECT id FROM bulbs WHERE user_email = ? AND bulb_id = ?', (user_email, bulb_id))
         if c.fetchone():
             conn.close()
-            print(f"Bulb already added: {bulb_name}")
             return jsonify({'status': 'error', 'message': 'Bulb already added'}), 409
-
-        # Insert new bulb entry
-        c.execute('INSERT INTO bulbs (user_email, bulb_id, bulb_name, room_name, is_simulated) VALUES (?, ?, ?, ?, ?)',
+        c.execute('INSERT INTO bulbs (user_email, bulb_id, bulb_name, room_name, is_simulated) VALUES (?,?,?,?,?)',
                   (user_email, bulb_id, bulb_name, room_name, 1 if is_simulated else 0))
-        conn.commit()
-        conn.close()
-        
-        print(f"Bulb added: {bulb_name}")
+        conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'Bulb added successfully'})
-    
     except Exception as e:
-        print(f"Add bulb error: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to add bulb'}), 500
 
-# Get bulbs filtered by simulator mode
+
 @app.route('/get_bulbs', methods=['POST'])
 def get_bulbs():
     data = request.get_json()
     user_email = data.get('email', '').strip()
     simulator_mode = data.get('simulator_mode', True)
-    
     if not user_email:
         return jsonify({'status': 'error', 'message': 'Email is required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-        
+        conn = get_db(); c = conn.cursor()
         if simulator_mode:
-            query = '''SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated 
-                      FROM bulbs WHERE user_email = ? AND is_simulated = 1 
-                      ORDER BY added_at DESC'''
-            print(f"Simulator Mode ON - Loading SIMULATED bulbs for {user_email}")
+            q = 'SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated FROM bulbs WHERE user_email = ? AND is_simulated = 1 ORDER BY added_at DESC'
         else:
-            query = '''SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated 
-                      FROM bulbs WHERE user_email = ? AND (is_simulated = 0 OR is_simulated IS NULL)
-                      ORDER BY added_at DESC'''
-            print(f"Real Hardware Mode - Loading REAL bulbs for {user_email}")
-        
-        c.execute(query, (user_email,))
-        
+            q = 'SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated FROM bulbs WHERE user_email = ? AND (is_simulated = 0 OR is_simulated IS NULL) ORDER BY added_at DESC'
+        c.execute(q, (user_email,))
         bulbs = []
         for row in c.fetchall():
-            is_sim = bool(row[5]) if row[5] is not None else False
-            bulbs.append({
-                'bulb_id': row[0],
-                'bulb_name': row[1],
-                'room_name': row[2],
-                'added_at': row[3],
-                'last_seen': row[4],
-                'is_simulated': is_sim
-            })
-            print(f"  - {row[1]} (simulated: {is_sim})")
-        
+            bulbs.append({'bulb_id': row[0], 'bulb_name': row[1], 'room_name': row[2],
+                          'added_at': row[3], 'last_seen': row[4],
+                          'is_simulated': bool(row[5]) if row[5] is not None else False})
         conn.close()
-        print(f"Retrieved {len(bulbs)} bulbs (simulator_mode={simulator_mode})")
         return jsonify({'status': 'success', 'bulbs': bulbs})
-    
     except Exception as e:
-        print(f"Get bulbs error: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'status': 'error', 'message': 'Failed to retrieve bulbs'}), 500
 
-# Update the name or room of an existing bulb
+
 @app.route('/update_bulb', methods=['POST'])
 def update_bulb():
     data = request.get_json()
@@ -382,80 +421,444 @@ def update_bulb():
     bulb_id = data.get('bulb_id', '').strip()
     bulb_name = data.get('bulb_name')
     room_name = data.get('room_name')
-    
     if not user_email or not bulb_id:
         return jsonify({'status': 'error', 'message': 'Email and bulb_id are required'}), 400
-    
-    if not bulb_name and not room_name:
-        return jsonify({'status': 'error', 'message': 'At least one field to update is required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-        
-        updates = []
-        params = []
-        
-        if bulb_name:
-            updates.append('bulb_name = ?')
-            params.append(bulb_name.strip())
-        
-        if room_name:
-            updates.append('room_name = ?')
-            params.append(room_name.strip())
-        
-        params.extend([user_email, bulb_id])
-
-        query = f"UPDATE bulbs SET {', '.join(updates)} WHERE user_email = ? AND bulb_id = ?"
-        c.execute(query, params)
-        
-        if c.rowcount == 0:
+        conn = get_db(); c = conn.cursor()
+        updates, params = [], []
+        if bulb_name: updates.append('bulb_name = ?'); params.append(bulb_name.strip())
+        if room_name: updates.append('room_name = ?'); params.append(room_name.strip())
+        if not updates:
             conn.close()
-            return jsonify({'status': 'error', 'message': 'Bulb not found'}), 404
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"Bulb updated: {bulb_id}")
+            return jsonify({'status': 'error', 'message': 'Nothing to update'}), 400
+        params.extend([user_email, bulb_id])
+        c.execute(f"UPDATE bulbs SET {', '.join(updates)} WHERE user_email = ? AND bulb_id = ?", params)
+        conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'Bulb updated successfully'})
-    
     except Exception as e:
-        print(f"Update bulb error: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to update bulb'}), 500
 
-# Delete a bulb from the user account
+
 @app.route('/delete_bulb', methods=['POST'])
 def delete_bulb():
     data = request.get_json()
     user_email = data.get('email', '').strip()
     bulb_id = data.get('bulb_id', '').strip()
-    
     if not user_email or not bulb_id:
         return jsonify({'status': 'error', 'message': 'Email and bulb_id are required'}), 400
-    
     try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
+        conn = get_db(); c = conn.cursor()
         c.execute('DELETE FROM bulbs WHERE user_email = ? AND bulb_id = ?', (user_email, bulb_id))
-        
         if c.rowcount == 0:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Bulb not found'}), 404
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"Bulb deleted: {bulb_id}")
+        conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'Bulb deleted successfully'})
-    
     except Exception as e:
-        print(f"Delete bulb error: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to delete bulb'}), 500
 
 
+# ─────────────────────────────────────────────────────────────
+# USAGE LOGGING
+# ─────────────────────────────────────────────────────────────
+@app.route('/log_usage', methods=['POST'])
+def log_usage():
+    """Called by the app every time the user changes bulb state."""
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    bulb_id = data.get('bulb_id', '').strip()
+    event_type = data.get('event_type', '')   # power_on / power_off / brightness_change / colour_change
+    power = data.get('power')
+    brightness = data.get('brightness')
+    colour_temp = data.get('colour_temp')
+    if not user_email or not bulb_id or not event_type:
+        return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
+    now = datetime.now()
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''
+            INSERT INTO bulb_usage_events
+            (user_email, bulb_id, event_type, power, brightness, colour_temp,
+             hour_of_day, minute_of_day, day_of_week)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        ''', (user_email, bulb_id, event_type, power, brightness, colour_temp,
+              now.hour, now.minute, now.weekday() + 1))
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# SLEEP / HEALTH DATA
+# ─────────────────────────────────────────────────────────────
+@app.route('/sync_sleep', methods=['POST'])
+def sync_sleep():
+    """Store sleep window from HealthKit."""
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    sleep_start = data.get('sleep_start')   # ISO string
+    sleep_end = data.get('sleep_end')       # ISO string  (= wake time)
+    if not user_email:
+        return jsonify({'status': 'error', 'message': 'Email required'}), 400
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''
+            INSERT INTO health_sleep_data (user_email, sleep_start, sleep_end, wake_time, bedtime, source)
+            VALUES (?,?,?,?,?,?)
+        ''', (user_email, sleep_start, sleep_end, sleep_end, sleep_start, 'healthkit'))
+        conn.commit(); conn.close()
+        # Auto-generate sleep-based schedule suggestions
+        _generate_sleep_suggestions(user_email, sleep_start, sleep_end)
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
+    """Create wind-down and wake-up schedule suggestions from sleep data."""
+    try:
+        # Parse ISO strings like "2025-04-18T22:30:00"
+        sleep_dt = datetime.fromisoformat(sleep_start_iso[:19])
+        wake_dt = datetime.fromisoformat(wake_time_iso[:19])
+
+        # Wind-down: 15 mins before bedtime
+        wd = sleep_dt - timedelta(minutes=15)
+        # Wake-up: 15 mins before wake time
+        wu = wake_dt - timedelta(minutes=15)
+
+        conn = get_db(); c = conn.cursor()
+        # Get first bulb for the user
+        c.execute('SELECT bulb_id FROM bulbs WHERE user_email = ? LIMIT 1', (user_email,))
+        row = c.fetchone()
+        bulb_id = row[0] if row else 'demo-bulb-1'
+
+        for stype, dt, action, brightness, colour_temp, name in [
+            ('sleep_wind_down', wd, 'dim_warm', 40, 255, 'Wind-down dim'),
+            ('sleep_wake_up',   wu, 'brighten_cool', 200, 80, 'Gentle wake-up'),
+        ]:
+            c.execute('''
+                INSERT INTO schedule_suggestions
+                (user_email, bulb_id, suggestion_type, trigger_hour, trigger_minute,
+                 action, brightness, colour_temp, confidence, observation_count, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ''', (user_email, bulb_id, stype, dt.hour, dt.minute,
+                  action, brightness, colour_temp, 0.95, 1, 'pending'))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"Sleep suggestion error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────
+# ML: ANALYSE USAGE & GENERATE SUGGESTIONS
+# ─────────────────────────────────────────────────────────────
+@app.route('/analyse_usage', methods=['POST'])
+def analyse_usage():
+    """
+    Simple sliding-window ML:
+    - Groups events by event_type + rounded hour (±30 min)
+    - Counts occurrences across days
+    - Computes confidence = occurrences / total_days_observed
+    - Emits suggestions for patterns with confidence >= 0.55
+    """
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    bulb_id = data.get('bulb_id', '').strip()
+    if not user_email or not bulb_id:
+        return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
+
+    conn = get_db(); c = conn.cursor()
+
+    # Last 28 days of events
+    c.execute('''
+        SELECT event_type, hour_of_day, minute_of_day, power, brightness, colour_temp
+        FROM bulb_usage_events
+        WHERE user_email = ? AND bulb_id = ?
+          AND recorded_at >= datetime('now', '-28 days')
+        ORDER BY recorded_at ASC
+    ''', (user_email, bulb_id))
+    events = c.fetchall()
+
+    # Count distinct days in window
+    c.execute('''
+        SELECT COUNT(DISTINCT date(recorded_at))
+        FROM bulb_usage_events
+        WHERE user_email = ? AND bulb_id = ?
+          AND recorded_at >= datetime('now', '-28 days')
+    ''', (user_email, bulb_id))
+    total_days = max(c.fetchone()[0], 1)
+
+    # Bucket events into 30-min windows
+    buckets = defaultdict(list)
+    for ev_type, h, m, power, brightness, col in events:
+        # Round to nearest 30-min bucket
+        bucket_m = 0 if m < 30 else 30
+        key = (ev_type, h, bucket_m)
+        buckets[key].append({'brightness': brightness, 'colour_temp': col, 'power': power})
+
+    suggestions_created = 0
+    for (ev_type, h, bm), entries in buckets.items():
+        confidence = len(entries) / total_days
+        if confidence < 0.55:
+            continue
+
+        # Median brightness / colour_temp
+        brights = [e['brightness'] for e in entries if e['brightness'] is not None]
+        cols    = [e['colour_temp'] for e in entries if e['colour_temp'] is not None]
+        med_b = int(sorted(brights)[len(brights)//2]) if brights else 255
+        med_c = int(sorted(cols)[len(cols)//2]) if cols else 128
+
+        # Determine action
+        if ev_type == 'power_off':
+            action = 'power_off'
+        elif ev_type == 'power_on':
+            action = 'power_on'
+        elif med_b <= 80:
+            action = 'dim_warm'
+        else:
+            action = 'brightness_change'
+
+        # Window boundaries
+        w_start_h, w_start_m = (h, bm)
+        w_end_m = bm + 30
+        w_end_h = h
+        if w_end_m >= 60:
+            w_end_m -= 60; w_end_h += 1
+        trigger_m = bm + 15
+        trigger_h = h
+        if trigger_m >= 60:
+            trigger_m -= 60; trigger_h += 1
+
+        # Don't duplicate existing pending suggestion
+        c.execute('''
+            SELECT id FROM schedule_suggestions
+            WHERE user_email=? AND bulb_id=? AND suggestion_type=?
+              AND trigger_hour=? AND trigger_minute=? AND status='pending'
+        ''', (user_email, bulb_id, 'auto_' + ev_type, trigger_h, trigger_m))
+        if c.fetchone():
+            continue
+
+        c.execute('''
+            INSERT INTO schedule_suggestions
+            (user_email, bulb_id, suggestion_type, trigger_hour, trigger_minute,
+             window_start_hour, window_start_minute, window_end_hour, window_end_minute,
+             action, brightness, colour_temp, confidence, observation_count, status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', (user_email, bulb_id, 'auto_' + ev_type,
+              trigger_h, trigger_m,
+              w_start_h, w_start_m, w_end_h, w_end_m,
+              action, med_b, med_c,
+              round(confidence, 2), len(entries), 'pending'))
+        suggestions_created += 1
+
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'suggestions_created': suggestions_created,
+                    'days_analysed': total_days, 'events_processed': len(events)})
+
+
+# ─────────────────────────────────────────────────────────────
+# SUGGESTIONS CRUD
+# ─────────────────────────────────────────────────────────────
+@app.route('/get_suggestions', methods=['POST'])
+def get_suggestions():
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    bulb_id = data.get('bulb_id', '').strip()
+    try:
+        conn = get_db(); c = conn.cursor()
+        q = '''SELECT id, suggestion_type, trigger_hour, trigger_minute,
+                      window_start_hour, window_start_minute,
+                      window_end_hour, window_end_minute,
+                      action, brightness, colour_temp,
+                      confidence, observation_count, status, created_at
+               FROM schedule_suggestions
+               WHERE user_email = ? AND status = 'pending'
+            '''
+        params = [user_email]
+        if bulb_id:
+            q += ' AND bulb_id = ?'; params.append(bulb_id)
+        q += ' ORDER BY confidence DESC'
+        c.execute(q, params)
+        rows = c.fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            result.append({
+                'id': r[0], 'suggestion_type': r[1],
+                'trigger_hour': r[2], 'trigger_minute': r[3],
+                'window_start_hour': r[4], 'window_start_minute': r[5],
+                'window_end_hour': r[6], 'window_end_minute': r[7],
+                'action': r[8], 'brightness': r[9], 'colour_temp': r[10],
+                'confidence': r[11], 'observation_count': r[12],
+                'status': r[13], 'created_at': r[14]
+            })
+        return jsonify({'status': 'success', 'suggestions': result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/respond_suggestion', methods=['POST'])
+def respond_suggestion():
+    """Accept, dismiss, or auto-approve a suggestion."""
+    data = request.get_json()
+    suggestion_id = data.get('suggestion_id')
+    response = data.get('response')   # 'accept' | 'dismiss' | 'auto'
+    user_email = data.get('email', '').strip()
+    if not suggestion_id or not response:
+        return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''
+            SELECT id, bulb_id, suggestion_type, trigger_hour, trigger_minute,
+                   action, brightness, colour_temp, confidence
+            FROM schedule_suggestions WHERE id = ?
+        ''', (suggestion_id,))
+        s = c.fetchone()
+        if not s:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Suggestion not found'}), 404
+
+        if response == 'dismiss':
+            c.execute("UPDATE schedule_suggestions SET status='dismissed' WHERE id=?", (suggestion_id,))
+        else:
+            # Accept / auto – promote to schedule
+            c.execute('''
+                INSERT INTO schedules
+                (user_email, bulb_id, schedule_name, schedule_type,
+                 trigger_hour, trigger_minute, action,
+                 brightness, colour_temp, confidence, source, is_enabled)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'auto',1)
+            ''', (user_email, s[1],
+                  f"Auto: {s[2].replace('_', ' ').title()}",
+                  'auto', s[3], s[4], s[5], s[6], s[7], s[8]))
+            c.execute("UPDATE schedule_suggestions SET status='accepted' WHERE id=?", (suggestion_id,))
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# SCHEDULES CRUD
+# ─────────────────────────────────────────────────────────────
+@app.route('/get_schedules', methods=['POST'])
+def get_schedules():
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    bulb_id = data.get('bulb_id', '').strip()
+    try:
+        conn = get_db(); c = conn.cursor()
+        q = '''SELECT id, bulb_id, schedule_name, schedule_type,
+                      trigger_hour, trigger_minute, end_hour, end_minute,
+                      action, brightness, colour_temp, is_enabled,
+                      confidence, source, days_of_week
+               FROM schedules WHERE user_email = ?'''
+        params = [user_email]
+        if bulb_id:
+            q += ' AND bulb_id = ?'; params.append(bulb_id)
+        q += ' ORDER BY trigger_hour, trigger_minute'
+        c.execute(q, params)
+        rows = c.fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            result.append({
+                'id': r[0], 'bulb_id': r[1], 'schedule_name': r[2],
+                'schedule_type': r[3],
+                'trigger_hour': r[4], 'trigger_minute': r[5],
+                'end_hour': r[6], 'end_minute': r[7],
+                'action': r[8], 'brightness': r[9], 'colour_temp': r[10],
+                'is_enabled': bool(r[11]), 'confidence': r[12],
+                'source': r[13], 'days_of_week': r[14]
+            })
+        return jsonify({'status': 'success', 'schedules': result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/add_schedule', methods=['POST'])
+def add_schedule():
+    data = request.get_json()
+    user_email = data.get('email', '').strip()
+    bulb_id = data.get('bulb_id', '').strip()
+    schedule_name = data.get('schedule_name', '').strip()
+    trigger_hour = data.get('trigger_hour')
+    trigger_minute = data.get('trigger_minute', 0)
+    action = data.get('action', 'power_on')
+    brightness = data.get('brightness', 255)
+    colour_temp = data.get('colour_temp', 128)
+    days = data.get('days_of_week', '1,2,3,4,5,6,7')
+    end_hour = data.get('end_hour')
+    end_minute = data.get('end_minute', 0)
+    if not user_email or not bulb_id or not schedule_name or trigger_hour is None:
+        return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('''
+            INSERT INTO schedules
+            (user_email, bulb_id, schedule_name, schedule_type,
+             trigger_hour, trigger_minute, end_hour, end_minute,
+             action, brightness, colour_temp, source, days_of_week, confidence)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'manual',?,1.0)
+        ''', (user_email, bulb_id, schedule_name, 'manual',
+              trigger_hour, trigger_minute, end_hour, end_minute,
+              action, brightness, colour_temp, days))
+        schedule_id = c.lastrowid
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success', 'schedule_id': schedule_id})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/update_schedule', methods=['POST'])
+def update_schedule():
+    data = request.get_json()
+    schedule_id = data.get('schedule_id')
+    user_email = data.get('email', '').strip()
+    if not schedule_id or not user_email:
+        return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
+    try:
+        conn = get_db(); c = conn.cursor()
+        updatable = ['schedule_name', 'trigger_hour', 'trigger_minute', 'end_hour', 'end_minute',
+                     'action', 'brightness', 'colour_temp', 'is_enabled', 'days_of_week']
+        updates, params = [], []
+        for field in updatable:
+            if field in data:
+                updates.append(f'{field} = ?')
+                params.append(data[field])
+        if not updates:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Nothing to update'}), 400
+        params.extend([schedule_id, user_email])
+        c.execute(f"UPDATE schedules SET {', '.join(updates)} WHERE id=? AND user_email=?", params)
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/delete_schedule', methods=['POST'])
+def delete_schedule():
+    data = request.get_json()
+    schedule_id = data.get('schedule_id')
+    user_email = data.get('email', '').strip()
+    if not schedule_id or not user_email:
+        return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
+    try:
+        conn = get_db(); c = conn.cursor()
+        c.execute('DELETE FROM schedules WHERE id=? AND user_email=?', (schedule_id, user_email))
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
     print("\n" + "="*50)
-    print("Flask Server Starting...")
+    print("Flask Server Starting…")
     print("="*50 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)

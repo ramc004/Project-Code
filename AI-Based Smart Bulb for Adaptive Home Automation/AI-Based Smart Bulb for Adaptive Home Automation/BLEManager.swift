@@ -48,16 +48,20 @@ class BLEManager: NSObject, ObservableObject {
     private let serviceUUID    = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
     private let powerUUID      = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
     private let brightnessUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a9")
-    // colourTemp uses the old colorUUID slot — one byte: 0=warm, 255=cool
     private let colourTempUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26aa")
     private let modeUUID       = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26ab")
     private let statusUUID     = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26ac")
+    // NEW: autonomous schedule engine
+    private let scheduleUUID   = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26ad")
+    private let timeUUID       = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26ae")
     
     private var powerCharacteristic: CBCharacteristic?
     private var brightnessCharacteristic: CBCharacteristic?
     private var colourTempCharacteristic: CBCharacteristic?
     private var modeCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
+    private var scheduleCharacteristic: CBCharacteristic?
+    private var timeCharacteristic: CBCharacteristic?
     
     private var simulatedBulbIDs: [UUID] = []
     
@@ -204,6 +208,84 @@ class BLEManager: NSObject, ObservableObject {
         connectedPeripheral?.writeValue(Data([mode]), for: c, type: .withResponse)
         bulbState.mode = mode
     }
+
+    // MARK: - Time sync (call once after connection)
+    /// Sends the current wall-clock time so the ESP32 can run schedules autonomously.
+    func syncCurrentTime() {
+        if simulatorMode { return }
+        guard let c = timeCharacteristic else { return }
+        let cal  = Calendar.current
+        let now  = Date()
+        let h    = UInt8(cal.component(.hour,    from: now))
+        let m    = UInt8(cal.component(.minute,  from: now))
+        let s    = UInt8(cal.component(.second,  from: now))
+        // Convert Gregorian weekday (1=Sun..7=Sat) → 1=Mon..7=Sun
+        let gWD  = cal.component(.weekday, from: now)
+        let monWD = UInt8(gWD == 1 ? 7 : gWD - 1)
+        connectedPeripheral?.writeValue(Data([h, m, s, monWD]), for: c, type: .withResponse)
+        print("⏱ Time synced to ESP32: \(h):\(String(format: "%02d", m)):\(String(format: "%02d", s)) weekday=\(monWD)")
+    }
+
+    // MARK: - Schedule push helpers
+
+    /// Action byte mapping must match the .ino switch cases exactly.
+    private func actionByte(for action: ScheduleAction) -> UInt8 {
+        switch action {
+        case .powerOn:          return 0
+        case .powerOff:         return 1
+        case .dimWarm:          return 2
+        case .brightenCool:     return 3
+        case .brightnessChange: return 4
+        case .colourChange:     return 5
+        }
+    }
+
+    /// Push one schedule into a specific flash slot on the ESP32.
+    func pushSchedule(_ schedule: BulbSchedule, slot: Int) {
+        if simulatorMode { return }
+        guard let c = scheduleCharacteristic, slot < 20 else { return }
+        let daysMask = schedule.daysArray.reduce(UInt8(0)) { mask, day in
+            // day: 1=Mon..7=Sun → bit position 0..6
+            mask | (1 << UInt8(day - 1))
+        }
+        let payload: [UInt8] = [
+            1,                                     // command = add
+            UInt8(slot),
+            UInt8(schedule.triggerHour),
+            UInt8(schedule.triggerMinute),
+            actionByte(for: schedule.action),
+            UInt8(min(255, schedule.brightness)),
+            UInt8(min(255, schedule.colourTemp)),
+            daysMask,
+            schedule.isEnabled ? 1 : 0
+        ]
+        connectedPeripheral?.writeValue(Data(payload), for: c, type: .withResponse)
+        print("📅 Pushed schedule slot \(slot): \(schedule.scheduleName) @ \(schedule.timeString)")
+    }
+
+    /// Clear all schedules on the ESP32, then push the full list.
+    func pushAllSchedules(_ schedules: [BulbSchedule]) {
+        if simulatorMode { return }
+        guard let c = scheduleCharacteristic else { return }
+        // Command 0 = clear all
+        connectedPeripheral?.writeValue(Data([0]), for: c, type: .withResponse)
+        // Small delay between BLE writes to avoid dropping packets
+        for (index, schedule) in schedules.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index + 1) * 0.15) {
+                self.pushSchedule(schedule, slot: index)
+            }
+        }
+        print("📅 Pushing \(schedules.count) schedules to ESP32")
+    }
+
+    /// Delete a single schedule slot by its position index.
+    func deleteScheduleSlot(_ slot: Int) {
+        if simulatorMode { return }
+        guard let c = scheduleCharacteristic, slot < 20 else { return }
+        let payload: [UInt8] = [2, UInt8(slot)] // command = delete
+        connectedPeripheral?.writeValue(Data(payload), for: c, type: .withResponse)
+        print("🗑 Deleted ESP32 schedule slot \(slot)")
+    }
     // MARK: - Bluetooth state helper
     private func updateBluetoothStateMessage() {
         DispatchQueue.main.async {
@@ -262,6 +344,8 @@ extension BLEManager: CBCentralManagerDelegate {
         colourTempCharacteristic = nil
         modeCharacteristic = nil
         statusCharacteristic = nil
+        scheduleCharacteristic = nil
+        timeCharacteristic = nil
     }
     
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -300,8 +384,21 @@ extension BLEManager: CBPeripheralDelegate {
             case statusUUID:
                 statusCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
+            case scheduleUUID:
+                scheduleCharacteristic = characteristic
+            case timeUUID:
+                timeCharacteristic = characteristic
             default:
                 break
+            }
+        }
+        // Once all characteristics are discovered, sync time and push schedules.
+        // Small delay ensures all writes land after BLE negotiation settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.syncCurrentTime()
+            // Ask ScheduleManager for the current schedule list and push it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.pushAllSchedules(ScheduleManager.shared.schedules)
             }
         }
     }
