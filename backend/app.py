@@ -10,9 +10,8 @@ from collections import defaultdict
 
 app = Flask(__name__)
 
-# ─────────────────────────────────────────────────────────────
-# DATABASE INIT
-# ─────────────────────────────────────────────────────────────
+# Database Initiation
+
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -41,12 +40,15 @@ def init_db():
         )
     ''')
 
+    # Alter table is used instead of the CREATE statement above because the
+    # is_simulated column was added after the initial schema
+    # Wrapping it in a try/except means this won't crash if the column already exists 
+    # SQLite raises OperationalError for duplicate column additions
     try:
         c.execute('ALTER TABLE bulbs ADD COLUMN is_simulated INTEGER DEFAULT 0')
     except sqlite3.OperationalError:
         pass
 
-    # ── Usage events: every time user changes power/brightness/colourTemp ──
     c.execute('''
         CREATE TABLE IF NOT EXISTS bulb_usage_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +65,6 @@ def init_db():
         )
     ''')
 
-    # ── Schedules: manually created OR auto-generated ──────────────────────
     c.execute('''
         CREATE TABLE IF NOT EXISTS schedules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +87,6 @@ def init_db():
         )
     ''')
 
-    # ── Health / sleep data synced from HealthKit ──────────────────────────
     c.execute('''
         CREATE TABLE IF NOT EXISTS health_sleep_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,7 +100,6 @@ def init_db():
         )
     ''')
 
-    # ── ML suggestions waiting for user approval ───────────────────────────
     c.execute('''
         CREATE TABLE IF NOT EXISTS schedule_suggestions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,17 +125,15 @@ def init_db():
     conn.commit()
     conn.close()
 
-    # Seed test data for quick testing
     _seed_test_data()
     print("Database initialised")
 
-
 def _seed_test_data():
-    """Insert demo usage events and a test suggestion so the ML has something to work with."""
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
 
-    # Only seed once
+    # Guard clause, if any usage events already exist the DB has already been
+    # seeded, so return immediately to avoid duplicating test data on restart
     c.execute("SELECT COUNT(*) FROM bulb_usage_events")
     if c.fetchone()[0] > 0:
         conn.close()
@@ -145,26 +142,24 @@ def _seed_test_data():
     print("Seeding test usage data…")
     now = datetime.now()
 
-    # Build 14 days of synthetic usage:
-    #   - Turn on at ~07:30 every day (wake up)
-    #   - Dim at ~21:45 (wind down)
-    #   - Turn off at ~22:00 (bed)
     events = []
     for day_offset in range(14):
         base = now - timedelta(days=day_offset)
-        dow = base.weekday() + 1  # 1=Mon … 7=Sun
+        # weekday() returns 0–6 (Mon–Sun); +1 shifts it to the 1–7 convention
+        # used throughout the app so Monday = 1 and Sunday = 7
+        dow = base.weekday() + 1
 
-        # Morning turn-on: 07:25 – 07:35 jitter
-        m_min = 25 + (day_offset % 3) * 3  # jitter
+        m_min = 25 + (day_offset % 3) * 3
         events.append(('test@example.com', 'demo-bulb-1', 'power_on',
                         1, 255, 200, 7, m_min, dow))
 
-        # Evening dim: 21:40 – 21:50 jitter
         e_min = 40 + (day_offset % 4) * 2
         events.append(('test@example.com', 'demo-bulb-1', 'brightness_change',
                         1, 60, 255, 21, e_min, dow))
 
-        # Bed turn-off: 21:55 – 22:05
+        # When jitter pushes the minute value past 59 it wraps into the next
+        # hour, so the hour is incremented to 22 and the minute is adjusted
+        # accordingly to keep the timestamp accurate
         b_min = 55 + (day_offset % 3)
         if b_min >= 60:
             events.append(('test@example.com', 'demo-bulb-1', 'power_off',
@@ -173,6 +168,9 @@ def _seed_test_data():
             events.append(('test@example.com', 'demo-bulb-1', 'power_off',
                             0, 0, 255, 21, b_min, dow))
 
+    # The list comprehension pairs each event tuple with its day_offset so the
+    # recorded_at timestamp can be backdated using SQLite's datetime modifier,
+    # simulating 14 days of real historical data in a single bulk insert
     c.executemany('''
         INSERT INTO bulb_usage_events
         (user_email, bulb_id, event_type, power, brightness, colour_temp,
@@ -182,7 +180,6 @@ def _seed_test_data():
            str(day_offset)) for day_offset, e in
           [(i // 3, events[i]) for i in range(len(events))]])
 
-    # Insert a pre-built suggestion
     c.execute('''
         INSERT OR IGNORE INTO schedule_suggestions
         (user_email, bulb_id, suggestion_type,
@@ -202,10 +199,7 @@ def _seed_test_data():
     conn.close()
     print("Test data seeded.")
 
-
-# ─────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────
+# Helpers
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -215,42 +209,40 @@ def verify_password(stored_hash, provided_password):
 def get_db():
     return sqlite3.connect('users.db')
 
-
-# ─────────────────────────────────────────────────────────────
-# HEALTH CHECK
-# ─────────────────────────────────────────────────────────────
+# Health Check
 @app.route('/health', methods=['GET', 'POST'])
 def health():
     return jsonify({'status': 'ok'}), 200
 
-
-# ─────────────────────────────────────────────────────────────
-# AUTH ROUTES  (unchanged)
-# ─────────────────────────────────────────────────────────────
+# Authentication Routes
 @app.route('/send_code', methods=['POST'])
 def send_code():
     data = request.get_json()
     email_recipient = data.get('email')
     code = data.get('code')
+
+    # Basic format checks before touching the mail server, avoids using an
+    # SMTP connection on a request that was always going to be invalid
     if not email_recipient or "@" not in email_recipient:
         return jsonify({'status': 'error', 'message': 'Invalid email'}), 400
     if not code or len(code) != 6:
         return jsonify({'status': 'error', 'message': 'Invalid code'}), 400
+
     email_recipient = email_recipient.strip()
     code = code.strip()
+
     try:
         with open("hello.txt", "r") as f:
             email_password = f.read().strip()
 
         email_sender = "ramcaleb50@gmail.com"
         sender_display_name = "Caleb's Home Automation System"
-        # Build email message
+
         msg = EmailMessage()
         msg["From"] = f"{sender_display_name} <{email_sender}>"
         msg["To"] = email_recipient
         msg["Subject"] = "Your Verification Code"
 
-        # Email body with user code
         email_body = f"""Hello,
 
 Your 6-digit verification code is: {code}
@@ -266,14 +258,18 @@ Caleb's Home Automation System
 This is an automated message. Please do not reply to this email."""
 
         msg.set_content(email_body)
+
+        # SMTP_SSL opens a TLS-wrapped connection from the start on port 465,
+        # unlike starttls() which upgrades a plain connection mid-session
+        # The context manager guarantees the socket is closed even if sending fails
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(email_sender, email_password)
             server.send_message(msg)
+
         return jsonify({'status': 'success', 'code': code})
     except Exception as e:
         print(f"Failed to send email: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to send email'}), 500
-
 
 @app.route('/check_email', methods=['POST'])
 def check_email():
@@ -285,22 +281,29 @@ def check_email():
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
         user = c.fetchone(); conn.close()
+        # Returns available: true when no row is found, so the client knows
+        # whether it can proceed with registration without a separate error path
         return jsonify({'status': 'success', 'available': user is None})
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Database error'}), 500
-
 
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
     email = data.get('email', '').strip()
     password = data.get('password', '')
+
     if not email or not password:
         return jsonify({'status': 'error', 'message': 'Email and password are required'}), 400
+
+    # Split on '@' and inspect the domain segment to catch formats like
+    # "user@nodot" that pass a simple '@' check but aren't valid addresses
     if '@' not in email or '.' not in email.split('@')[1]:
         return jsonify({'status': 'error', 'message': 'Invalid email format'}), 400
+
     if len(password) < 8:
         return jsonify({'status': 'error', 'message': 'Password must be at least 8 characters'}), 400
+
     try:
         conn = get_db(); c = conn.cursor()
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
@@ -311,11 +314,13 @@ def register():
                   (email, hash_password(password)))
         conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'User registered successfully'})
+    # IntegrityError is caught separately from the generic Exception because it
+    # represents a race condition where two requests register the same email at
+    # the same instant, the DB constraint fires even if the SELECT above missed it
     except sqlite3.IntegrityError:
         return jsonify({'status': 'error', 'message': 'Email already registered'}), 409
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Registration failed'}), 500
-
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -336,7 +341,6 @@ def login():
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Login failed'}), 500
 
-
 @app.route('/reset_password', methods=['POST'])
 def reset_password():
     data = request.get_json()
@@ -346,6 +350,8 @@ def reset_password():
         return jsonify({'status': 'error', 'message': 'Email and password are required'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # Confirm the account exists before hashing and writing, so the
+        # caller receives a clear 404 rather than a silent update
         c.execute('SELECT id FROM users WHERE email = ?', (email,))
         if not c.fetchone():
             conn.close()
@@ -357,10 +363,7 @@ def reset_password():
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Password reset failed'}), 500
 
-
-# ─────────────────────────────────────────────────────────────
-# BULB ROUTES  (unchanged)
-# ─────────────────────────────────────────────────────────────
+# Bulb Routes
 @app.route('/add_bulb', methods=['POST'])
 def add_bulb():
     data = request.get_json()
@@ -381,13 +384,14 @@ def add_bulb():
         if c.fetchone():
             conn.close()
             return jsonify({'status': 'error', 'message': 'Bulb already added'}), 409
+        # SQLite stores booleans as integers; the ternary converts the incoming
+        # Python/JSON bool to 1/0 explicitly so queries on is_simulated are consistent
         c.execute('INSERT INTO bulbs (user_email, bulb_id, bulb_name, room_name, is_simulated) VALUES (?,?,?,?,?)',
                   (user_email, bulb_id, bulb_name, room_name, 1 if is_simulated else 0))
         conn.commit(); conn.close()
         return jsonify({'status': 'success', 'message': 'Bulb added successfully'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Failed to add bulb'}), 500
-
 
 @app.route('/get_bulbs', methods=['POST'])
 def get_bulbs():
@@ -398,6 +402,9 @@ def get_bulbs():
         return jsonify({'status': 'error', 'message': 'Email is required'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # The query is chosen at runtime based on simulator_mode so the app can
+        # show either virtual demo bulbs or real paired hardware without
+        # returning both mixed together in the same list
         if simulator_mode:
             q = 'SELECT bulb_id, bulb_name, room_name, added_at, last_seen, is_simulated FROM bulbs WHERE user_email = ? AND is_simulated = 1 ORDER BY added_at DESC'
         else:
@@ -405,6 +412,9 @@ def get_bulbs():
         c.execute(q, (user_email,))
         bulbs = []
         for row in c.fetchall():
+            # is_simulated may be NULL for older rows inserted before the column
+            # existed, so the conditional None check prevents bool(None) = False
+            # from silently misclassifying legacy bulbs
             bulbs.append({'bulb_id': row[0], 'bulb_name': row[1], 'room_name': row[2],
                           'added_at': row[3], 'last_seen': row[4],
                           'is_simulated': bool(row[5]) if row[5] is not None else False})
@@ -412,7 +422,6 @@ def get_bulbs():
         return jsonify({'status': 'success', 'bulbs': bulbs})
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Failed to retrieve bulbs'}), 500
-
 
 @app.route('/update_bulb', methods=['POST'])
 def update_bulb():
@@ -425,6 +434,9 @@ def update_bulb():
         return jsonify({'status': 'error', 'message': 'Email and bulb_id are required'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # Only fields actually present in the request are added to the UPDATE
+        # statement, preventing accidental overwrites of fields the caller
+        # didn't intend to change and keeping the query minimal.
         updates, params = [], []
         if bulb_name: updates.append('bulb_name = ?'); params.append(bulb_name.strip())
         if room_name: updates.append('room_name = ?'); params.append(room_name.strip())
@@ -438,7 +450,6 @@ def update_bulb():
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Failed to update bulb'}), 500
 
-
 @app.route('/delete_bulb', methods=['POST'])
 def delete_bulb():
     data = request.get_json()
@@ -449,6 +460,9 @@ def delete_bulb():
     try:
         conn = get_db(); c = conn.cursor()
         c.execute('DELETE FROM bulbs WHERE user_email = ? AND bulb_id = ?', (user_email, bulb_id))
+        # rowcount is 0 when the where clause matched nothing, meaning the bulb
+        # either never existed or belongs to a different user, return 404 rather
+        # than silently claiming success
         if c.rowcount == 0:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Bulb not found'}), 404
@@ -457,17 +471,13 @@ def delete_bulb():
     except Exception as e:
         return jsonify({'status': 'error', 'message': 'Failed to delete bulb'}), 500
 
-
-# ─────────────────────────────────────────────────────────────
-# USAGE LOGGING
-# ─────────────────────────────────────────────────────────────
+# Usage logging
 @app.route('/log_usage', methods=['POST'])
 def log_usage():
-    """Called by the app every time the user changes bulb state."""
     data = request.get_json()
     user_email = data.get('email', '').strip()
     bulb_id = data.get('bulb_id', '').strip()
-    event_type = data.get('event_type', '')   # power_on / power_off / brightness_change / colour_change
+    event_type = data.get('event_type', '')
     power = data.get('power')
     brightness = data.get('brightness')
     colour_temp = data.get('colour_temp')
@@ -476,6 +486,9 @@ def log_usage():
     now = datetime.now()
     try:
         conn = get_db(); c = conn.cursor()
+        # hour_of_day, minute_of_day, and day_of_week are stored as separate
+        # integer columns rather than just recorded_at so the ML analysis can
+        # group and aggregate by time-of-day directly in SQL without string parsing
         c.execute('''
             INSERT INTO bulb_usage_events
             (user_email, bulb_id, event_type, power, brightness, colour_temp,
@@ -489,48 +502,39 @@ def log_usage():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# ─────────────────────────────────────────────────────────────
-# SLEEP / HEALTH DATA
-# ─────────────────────────────────────────────────────────────
+# Sleep and health data
 @app.route('/sync_sleep', methods=['POST'])
 def sync_sleep():
-    """Store sleep window from HealthKit."""
     data = request.get_json()
     user_email = data.get('email', '').strip()
-    sleep_start = data.get('sleep_start')   # ISO string
-    sleep_end = data.get('sleep_end')       # ISO string  (= wake time)
+    sleep_start = data.get('sleep_start')
+    sleep_end = data.get('sleep_end')
     if not user_email:
         return jsonify({'status': 'error', 'message': 'Email required'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # wake_time and bedtime mirror sleep_end/sleep_start respectively so
+        # queries can use semantic column names rather than remembering which
+        # direction sleep_start and sleep_end refer to
         c.execute('''
             INSERT INTO health_sleep_data (user_email, sleep_start, sleep_end, wake_time, bedtime, source)
             VALUES (?,?,?,?,?,?)
         ''', (user_email, sleep_start, sleep_end, sleep_end, sleep_start, 'healthkit'))
         conn.commit(); conn.close()
-        # Auto-generate sleep-based schedule suggestions
         _generate_sleep_suggestions(user_email, sleep_start, sleep_end)
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
 def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
-    """Create wind-down and wake-up schedule suggestions from sleep data.
-
-    Confidence scales with how many nights of data exist (max 0.75).
-    A single night is weak signal — the user's bedtime varies day to day.
-    After ~2 weeks of consistent data the suggestion becomes fairly reliable,
-    but we never claim certainty since sleep schedules shift with life events.
-
-      nights:  1 → 0.42,  3 → 0.50,  7 → 0.62,  14 → 0.72,  21+ → 0.75
-    """
     import math
     try:
+        # ISO strings from HealthKit may include timezone offsets or milliseconds;
+        # slicing to [:19] strips everything past the seconds component so
+        # fromisoformat() doesn't raise on extended formats
         sleep_dt = datetime.fromisoformat(sleep_start_iso[:19])
         wake_dt  = datetime.fromisoformat(wake_time_iso[:19])
 
-        # Wind-down 15 min before bedtime; gentle wake 15 min before alarm
         wd = sleep_dt - timedelta(minutes=15)
         wu = wake_dt  - timedelta(minutes=15)
 
@@ -540,7 +544,6 @@ def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
         row = c.fetchone()
         bulb_id = row[0] if row else 'demo-bulb-1'
 
-        # Count nights of sleep data in the last 30 days
         c.execute('''
             SELECT COUNT(*) FROM health_sleep_data
             WHERE user_email = ?
@@ -548,14 +551,20 @@ def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
         ''', (user_email,))
         nights = max(c.fetchone()[0] or 1, 1)
 
-        # Sigmoid-based scaling: honest at low counts, asymptotes at 0.75
+        # Sigmoid curve scales confidence from ~0.42 at 1 night up to a hard
+        # ceiling of 0.75 — the inflection point is at 7 nights (one week)
+        # where confidence reaches roughly 0.62. This prevents a single night
+        # of data from generating an overconfident suggestion
         sleep_confidence = min(round(0.75 / (1.0 + math.exp(-0.25 * (nights - 7))), 2), 0.75)
 
         for stype, dt, action, brightness, colour_temp in [
             ('sleep_wind_down', wd, 'dim_warm',       40,  255),
             ('sleep_wake_up',   wu, 'brighten_cool', 200,   80),
         ]:
-            # Don't duplicate an existing pending suggestion at the same time
+            # Before inserting, check whether a pending suggestion for this
+            # exact type and time already exists, HealthKit can sync the same
+            # night multiple times, and this prevents duplicate cards appearing
+            # in the user's suggestion list
             c.execute('''
                 SELECT id FROM schedule_suggestions
                 WHERE user_email=? AND bulb_id=? AND suggestion_type=?
@@ -576,10 +585,7 @@ def _generate_sleep_suggestions(user_email, sleep_start_iso, wake_time_iso):
     except Exception as e:
         print(f"Sleep suggestion error: {e}")
 
-
-# ─────────────────────────────────────────────────────────────
-# ML: ANALYSE USAGE & GENERATE SUGGESTIONS
-# ─────────────────────────────────────────────────────────────
+# Machine Learning: Analyse Usage & Generate Suggestions
 @app.route('/analyse_usage', methods=['POST'])
 def analyse_usage():
     """
@@ -588,14 +594,10 @@ def analyse_usage():
       confidence = consistency × sample_weight × recency_weight
 
       consistency   = distinct days this pattern fired / days the app was used
-                      (one event per day per bucket — duplicates collapsed so
-                       tapping the bulb 5 times in one evening doesn't inflate)
-      sample_weight = sigmoid ramp over distinct days of evidence:
-                      ~0.50 at 2 days, ~0.72 at 7, ~0.90 at 14, ~0.97 at 21
-      recency_weight= fraction of occurrences in the last 7 days, scaled
-                      0.70–1.00 (old stale patterns penalised, not zeroed)
+      sample_weight = sigmoid ramp over distinct days of evidence
+      recency_weight= fraction of occurrences in the last 7 days, scaled 0.70–1.00
 
-    Hard ceiling: 0.82  — real behaviour is never perfectly predictable
+    Hard ceiling: 0.82
     Minimum to surface: 0.40
     """
     import math
@@ -608,7 +610,6 @@ def analyse_usage():
 
     conn = get_db(); c = conn.cursor()
 
-    # ── Fetch last 28 days of raw events ─────────────────────────────────────
     c.execute('''
         SELECT event_type, hour_of_day, minute_of_day, brightness, colour_temp,
                date(recorded_at), recorded_at
@@ -619,13 +620,16 @@ def analyse_usage():
     ''', (user_email, bulb_id))
     events = c.fetchall()
 
-    # Days on which ANY event was logged — the true denominator
+    # Using a set of date strings as the denominator means consistency is
+    # relative to days the user actually opened the app, not calendar days 
+    # this avoids penalising patterns on days the app was never used
     active_days       = set(row[5] for row in events)
     total_active_days = max(len(active_days), 1)
 
-    # ── Collapse to one entry per (event_type, hour, slot, date) ─────────────
-    # Prevents multiple taps in the same 30-min window on the same day from
-    # inflating frequency above 1.0 per day.
+    # Events are collapsed into 30-minute slots before bucketing. The seen_day_buckets
+    # set ensures that if a user taps the bulb five times within the same half-hour
+    # on the same day, it only counts as one occurrence, preventing repeat
+    # interactions from artificially inflating a pattern's frequency score
     seen_day_buckets = set()
     buckets          = defaultdict(list)
 
@@ -648,33 +652,37 @@ def analyse_usage():
     suggestions_created = 0
 
     for (ev_type, h, bm), entries in buckets.items():
-        n = len(entries)   # distinct days this pattern fired
+        n = len(entries)
 
-        # ── Factor 1: consistency (naturally 0–1) ────────────────────────────
         consistency = n / total_active_days
 
-        # ── Factor 2: sample weight via sigmoid ──────────────────────────────
-        # Ramps smoothly: 2 days ≈ 0.50, 7 ≈ 0.72, 14 ≈ 0.90, 21 ≈ 0.97
+        # Sigmoid sample weight: at n=2 days the weight is ~0.50 (low confidence),
+        # rising to ~0.72 at 7 days and ~0.90 at 14
+        # The -7 shift centres the inflection point at one week of evidence
         sample_weight = 1.0 / (1.0 + math.exp(-0.35 * (n - 7)))
 
-        # ── Factor 3: recency weight (0.70–1.00) ────────────────────────────
+        # Recency weight floors at 0.70 so old patterns aren't zeroed out entirely
+        # they're penalised but still eligible if their consistency is strong enough
         recent        = sum(1 for e in entries if e['recorded_at'] >= week_ago_str)
         recency_ratio  = recent / n
         recency_weight = 0.70 + 0.30 * recency_ratio
 
-        # ── Combine and cap ──────────────────────────────────────────────────
         confidence = min(round(consistency * sample_weight * recency_weight, 2), 0.82)
 
         if confidence < 0.40:
             continue
 
-        # ── Median settings ──────────────────────────────────────────────────
+        # Median is used instead of mean for brightness and colour_temp because
+        # it's resistant to outliers, a single accidental maximum-brightness
+        # event won't skew the suggested setting away from the user's typical choice
         brights = [e['brightness']  for e in entries if e['brightness']  is not None]
         cols    = [e['colour_temp'] for e in entries if e['colour_temp'] is not None]
         med_b   = int(sorted(brights)[len(brights) // 2]) if brights else 255
         med_c   = int(sorted(cols)[len(cols) // 2])       if cols    else 128
 
-        # ── Determine action ─────────────────────────────────────────────────
+        # Action is inferred from event type first; for brightness_change events
+        # the median brightness determines whether this looks like a wind-down
+        # dim (≤80) or a general adjustment, giving the suggestion a meaningful label
         if ev_type == 'power_off':
             action = 'power_off'
         elif ev_type == 'power_on':
@@ -684,14 +692,17 @@ def analyse_usage():
         else:
             action = 'brightness_change'
 
-        # ── Window + trigger time ────────────────────────────────────────────
+        # The trigger is placed at the midpoint of the 30-minute slot window
+        # (bm + 15 min) rather than at its start, giving the app a reasonable
+        # target time while the window bounds are stored for display purposes
         w_start_h, w_start_m = h, bm
         w_end_m = bm + 30;   w_end_h = h
         if w_end_m >= 60:    w_end_m -= 60; w_end_h += 1
         trigger_m = bm + 15; trigger_h = h
         if trigger_m >= 60:  trigger_m -= 60; trigger_h += 1
 
-        # ── Deduplicate ──────────────────────────────────────────────────────
+        # Deduplication check prevents re-inserting a suggestion that's already pending
+        # analyse_usage can be called repeatedly and should be idempotent
         c.execute('''
             SELECT id FROM schedule_suggestions
             WHERE user_email=? AND bulb_id=? AND suggestion_type=?
@@ -717,10 +728,7 @@ def analyse_usage():
     return jsonify({'status': 'success', 'suggestions_created': suggestions_created,
                     'days_analysed': total_active_days, 'events_processed': len(events)})
 
-
-# ─────────────────────────────────────────────────────────────
-# SUGGESTIONS CRUD
-# ─────────────────────────────────────────────────────────────
+# Suggestions
 @app.route('/get_suggestions', methods=['POST'])
 def get_suggestions():
     data = request.get_json()
@@ -737,6 +745,8 @@ def get_suggestions():
                WHERE user_email = ? AND status = 'pending'
             '''
         params = [user_email]
+        # bulb_id filter is optional, if omitted, all pending suggestions for
+        # the user are returned regardless of which bulb they target
         if bulb_id:
             q += ' AND bulb_id = ?'; params.append(bulb_id)
         q += ' ORDER BY confidence DESC'
@@ -761,10 +771,9 @@ def get_suggestions():
 
 @app.route('/respond_suggestion', methods=['POST'])
 def respond_suggestion():
-    """Accept, dismiss, or auto-approve a suggestion."""
     data = request.get_json()
     suggestion_id = data.get('suggestion_id')
-    response = data.get('response')   # 'accept' | 'dismiss' | 'auto'
+    response = data.get('response')
     user_email = data.get('email', '').strip()
     if not suggestion_id or not response:
         return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
@@ -783,7 +792,10 @@ def respond_suggestion():
         if response == 'dismiss':
             c.execute("UPDATE schedule_suggestions SET status='dismissed' WHERE id=?", (suggestion_id,))
         else:
-            # Accept / auto – promote to schedule
+            # Accepting or auto-approving a suggestion promotes it directly into
+            # the schedules table with source='auto', so it runs like any other
+            # schedule, the name is derived from the suggestion_type to give the
+            # user a readable label without requiring them to name it manually
             c.execute('''
                 INSERT INTO schedules
                 (user_email, bulb_id, schedule_name, schedule_type,
@@ -799,10 +811,7 @@ def respond_suggestion():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
-# ─────────────────────────────────────────────────────────────
-# SCHEDULES CRUD
-# ─────────────────────────────────────────────────────────────
+# Schedules
 @app.route('/get_schedules', methods=['POST'])
 def get_schedules():
     data = request.get_json()
@@ -865,6 +874,9 @@ def add_schedule():
         ''', (user_email, bulb_id, schedule_name, 'manual',
               trigger_hour, trigger_minute, end_hour, end_minute,
               action, brightness, colour_temp, days))
+        # lastrowid returns the primary key of the row just inserted, sent back
+        # to the client so it can reference this schedule immediately without
+        # a follow-up fetch
         schedule_id = c.lastrowid
         conn.commit(); conn.close()
         return jsonify({'status': 'success', 'schedule_id': schedule_id})
@@ -881,6 +893,9 @@ def update_schedule():
         return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # The whitelist of updatable fields prevents arbitrary column injection
+        # through the request body — only fields in this list can be modified
+        # regardless of what the caller sends
         updatable = ['schedule_name', 'trigger_hour', 'trigger_minute', 'end_hour', 'end_minute',
                      'action', 'brightness', 'colour_temp', 'is_enabled', 'days_of_week']
         updates, params = [], []
@@ -908,6 +923,8 @@ def delete_schedule():
         return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
     try:
         conn = get_db(); c = conn.cursor()
+        # user_email is included in the WHERE clause so one user cannot delete
+        # another user's schedules by guessing a schedule_id
         c.execute('DELETE FROM schedules WHERE id=? AND user_email=?', (schedule_id, user_email))
         conn.commit(); conn.close()
         return jsonify({'status': 'success'})
@@ -915,12 +932,8 @@ def delete_schedule():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# ─────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────
+# Entry point
 if __name__ == "__main__":
     init_db()
-    print("\n" + "="*50)
     print("Flask Server Starting…")
-    print("="*50 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)
