@@ -176,11 +176,9 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Simulator Helpers
 
-    /// Loads the three stable simulated bulb UUIDs from `UserDefaults`.
-    ///
-    /// If fewer than three UUIDs are stored (e.g. on first launch), a fresh
-    /// set of three UUIDs is generated and persisted so they remain consistent
-    /// across app sessions.
+    /// Loads the three stable simulated bulb UUIDs from "UserDefaults"
+    
+    /// If fewer than three UUIDs are stored (e.g. on first launch), a fresh set of three UUIDs is generated and persisted so they remain consistent across app sessions
     private func loadSimulatedBulbIDs() {
         if let savedIDs = UserDefaults.standard.array(forKey: "simulatedBulbIDs") as? [String] {
             simulatedBulbIDs = savedIDs.compactMap { UUID(uuidString: $0) }
@@ -192,12 +190,11 @@ class BLEManager: NSObject, ObservableObject {
         }
     }
 
-    /// Creates the three virtual `SmartBulb` values used in Simulator Mode.
-    ///
-    /// Each bulb uses a stable UUID (from `simulatedBulbIDs`) and a fixed
-    /// RSSI value that decreases with index to simulate varying signal strengths.
-    ///
-    /// - Returns: An array of three simulated `SmartBulb` values.
+    /// Creates the three virtual "SmartBulb" values used in Simulator Mode
+    
+    /// Each bulb uses a stable UUID (from "simulatedBulbIDs") and a fixed RSSI value that decreases with index to simulate varying signal strengths
+
+    /// - Returns: An array of three simulated "SmartBulb" values
     private func createSimulatedBulbs() -> [SmartBulb] {
         let names = [
             "Smart Strip (Simulated)",
@@ -210,17 +207,15 @@ class BLEManager: NSObject, ObservableObject {
         }
     }
 
-    /// Sets the `bluetoothState` label to "Simulator Mode" on the main thread.
+    /// Sets the  "bluetoothState" label to "Simulator Mode" on the main thread
     private func updateBluetoothStateForSimulator() {
         DispatchQueue.main.async { self.bluetoothState = "Simulator Mode" }
     }
 
-    /// Resets the manager's discovered and connected state when Simulator Mode
-    /// is toggled in `SettingsView`.
-    ///
-    /// Clears `discoveredBulbs`, `connectedBulb`, and `isScanning`, then updates
-    /// the Bluetooth state label to reflect the new mode. Called from `AddBulbView`
-    /// after receiving a `SimulatorModeChanged` notification.
+    /// Resets the manager's discovered and connected state when Simulator Mode is toggled in "SettingsView"
+    
+    /// Clears "discoveredBulbs", "connectedBulb", and "isScanning", then updates the Bluetooth state label to reflect the new mode
+    /// Called from "AddBulbView" after receiving a "SimulatorModeChanged" notification
     func refreshSimulatorMode() {
         discoveredBulbs.removeAll()
         connectedBulb = nil
@@ -236,14 +231,12 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Scanning
 
-    /// Begins scanning for nearby smart bulb peripherals.
-    ///
-    /// In **Simulator Mode**: injects three virtual bulbs after a 1.5-second
-    /// artificial delay, then automatically stops scanning after 5 seconds.
-    ///
-    /// In **real hardware mode**: starts a Core Bluetooth scan filtered to
-    /// `serviceUUID`, de-duplicating results, and auto-stops after 10 seconds.
-    /// Returns early if Bluetooth is not powered on.
+    /// Begins scanning for nearby smart bulb peripherals
+    
+    /// In **Simulator Mode**: injects three virtual bulbs after a 1.5-second artificial delay, then automatically stops scanning after 5 seconds
+    
+    /// In **real hardware mode**: starts a Core Bluetooth scan filtered to "serviceUUID", de-duplicating results, and auto-stops after 10 seconds
+    /// Returns early if Bluetooth is not powered on
     func startScanning() {
         if simulatorMode {
             isScanning     = true
@@ -271,7 +264,8 @@ class BLEManager: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self.stopScanning() }
     }
 
-    /// Stops an active BLE scan. In Simulator Mode only clears the `isScanning` flag.
+    /// Stops an active BLE scan
+    /// In Simulator Mode only clears the "isScanning" flag
     func stopScanning() {
         if simulatorMode { isScanning = false; return }
         centralManager.stopScan()
@@ -280,15 +274,13 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Connection
 
-    /// Connects to the specified bulb.
-    ///
-    /// In **Simulator Mode**: simulates a 1-second connection delay, then marks
-    /// the bulb as connected and initialises `bulbState` to default values.
-    ///
-    /// In **real hardware mode**: stops any active scan and delegates connection
-    /// to the Core Bluetooth central manager.
-    ///
-    /// - Parameter bulb: The `SmartBulb` to connect to.
+    /// Connects to the specified bulb
+    
+    /// In **Simulator Mode**: simulates a 1-second connection delay, then marks the bulb as connected and initialises "bulbState" to default values
+    
+    /// In **real hardware mode**: stops any active scan and delegates connection to the Core Bluetooth central manager
+    
+    /// - Parameter bulb: The "SmartBulb" to connect to
     func connect(to bulb: SmartBulb) {
         if simulatorMode && bulb.isSimulated {
             // Simulate connection delay
@@ -309,11 +301,10 @@ class BLEManager: NSObject, ObservableObject {
         centralManager.connect(peripheral, options: nil)
     }
 
-    /// Disconnects the currently connected bulb.
-    ///
-    /// In Simulator Mode: clears `connectedBulb` and resets the `isConnected`
-    /// flag on all entries in `discoveredBulbs`. In real hardware mode:
-    /// cancels the Core Bluetooth peripheral connection.
+    /// Disconnects the currently connected bulb
+    
+    /// In Simulator Mode: clears "connectedBulb" and resets the "isConnected" flag on all entries in "discoveredBulbs"
+    /// In real hardware mode: cancels the Core Bluetooth peripheral connection
     func disconnect() {
         if simulatorMode {
             connectedBulb = nil
@@ -326,13 +317,12 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Control
 
-    /// Sets the bulb's power state.
-    ///
-    /// In Simulator Mode: updates `bulbState.power` directly.
-    /// In real hardware mode: writes a 1-byte value (1 = on, 0 = off) to
-    /// the power characteristic.
-    ///
-    /// - Parameter on: `true` to turn the bulb on, `false` to turn it off.
+    /// Sets the bulb's power state
+    
+    /// In Simulator Mode: updates "bulbState.power" directly
+    /// In real hardware mode: writes a 1-byte value (1 = on, 0 = off) to the power characteristic
+    
+    /// - Parameter on: "true" to turn the bulb on, "false" to turn it off
     func setPower(_ on: Bool) {
         if simulatorMode { bulbState.power = on; return }
         guard let c = powerCharacteristic else { return }
@@ -340,12 +330,12 @@ class BLEManager: NSObject, ObservableObject {
         bulbState.power = on
     }
 
-    /// Sets the bulb's brightness level.
-    ///
-    /// In Simulator Mode: updates `bulbState.brightness` directly.
-    /// In real hardware mode: writes the brightness byte to the brightness characteristic.
-    ///
-    /// - Parameter brightness: A value from 0 (off) to 255 (maximum brightness).
+    /// Sets the bulb's brightness level
+    
+    /// In Simulator Mode: updates "bulbState.brightness" directly
+    /// In real hardware mode: writes the brightness byte to the brightness characteristic
+    
+    /// - Parameter brightness: A value from 0 (off) to 255 (maximum brightness)
     func setBrightness(_ brightness: UInt8) {
         if simulatorMode { bulbState.brightness = brightness; return }
         guard let c = brightnessCharacteristic else { return }
@@ -353,16 +343,13 @@ class BLEManager: NSObject, ObservableObject {
         bulbState.brightness = brightness
     }
 
-    /// Sets the bulb's colour temperature.
-    ///
-    /// In Simulator Mode: updates `bulbState.colourTemp` directly.
-    /// In real hardware mode: writes a 3-byte packet to the colour temperature
-    /// characteristic. The Arduino firmware expects [warmByte, 0, coolByte] where
-    /// `warmByte = temp` and `coolByte = 255 - temp`, mapping:
-    /// - `temp = 255` → full warm white (warmByte=255, coolByte=0)
-    /// - `temp = 0`   → full cool white (warmByte=0, coolByte=255)
-    ///
-    /// - Parameter temp: Colour temperature value from 0 (cool) to 255 (warm).
+    /// Sets the bulb's colour temperature
+    
+    /// In Simulator Mode: updates "bulbState.colourTemp" directly
+    /// In real hardware mode: writes a 3-byte packet to the colour temperature characteristic.
+    /// The Arduino firmware expects [warmByte, 0, coolByte] where "warmByte = temp" and "coolByte = 255 - temp", mapping: - "temp = 255" → full warm white (warmByte=255, coolByte=0) - "temp = 0"   → full cool white (warmByte=0, coolByte=255)
+    
+    /// - Parameter temp: Colour temperature value from 0 (cool) to 255 (warm)
     func setColourTemp(_ temp: UInt8) {
         if simulatorMode {
             bulbState.colourTemp = temp
@@ -376,12 +363,12 @@ class BLEManager: NSObject, ObservableObject {
         bulbState.colourTemp = temp
     }
 
-    /// Sets the bulb's lighting effect mode.
-    ///
-    /// In Simulator Mode: updates `bulbState.mode` directly.
-    /// In real hardware mode: writes the mode byte to the mode characteristic.
-    ///
-    /// - Parameter mode: Effect mode byte (0 = solid, 1 = fade/pulse).
+    /// Sets the bulb's lighting effect mode
+    
+    /// In Simulator Mode: updates "bulbState.mode" directly
+    /// In real hardware mode: writes the mode byte to the mode characteristic
+    
+    /// - Parameter mode: Effect mode byte (0 = solid, 1 = fade/pulse)
     func setMode(_ mode: UInt8) {
         if simulatorMode { bulbState.mode = mode; return }
         guard let c = modeCharacteristic else { return }
@@ -391,14 +378,13 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Time Sync
 
-    /// Sends the current wall-clock time to the ESP32 so it can run schedules autonomously.
-    ///
-    /// Writes a 4-byte packet [hour, minute, second, weekday] to the time characteristic.
-    /// The weekday is converted from Gregorian convention (1=Sunday…7=Saturday) to
-    /// Monday-based convention (1=Monday…7=Sunday) to match the ESP32 firmware.
-    ///
-    /// No-op in Simulator Mode. Should be called once immediately after connection,
-    /// after a short delay to allow BLE negotiation to settle.
+    /// Sends the current wall-clock time to the ESP32 so it can run schedules autonomously
+    
+    /// Writes a 4-byte packet [hour, minute, second, weekday] to the time characteristic
+    /// The weekday is converted from Gregorian convention (1=Sunday…7=Saturday) to Monday-based convention (1=Monday…7=Sunday) to match the ESP32 firmware
+    
+    /// No-op in Simulator Mode
+    /// Should be called once immediately after connection, after a short delay to allow BLE negotiation to settle
     func syncCurrentTime() {
         if simulatorMode { return }
         guard let c = timeCharacteristic else { return }
@@ -416,13 +402,12 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Schedule Push Helpers
 
-    /// Maps a `ScheduleAction` enum case to the corresponding action byte expected
-    /// by the ESP32 firmware's switch statement.
-    ///
-    /// The byte values must exactly match the `.ino` action constants.
-    ///
-    /// - Parameter action: The schedule action to encode.
-    /// - Returns: A `UInt8` action byte for inclusion in the schedule payload.
+    /// Maps a "ScheduleAction" enum case to the corresponding action byte expected by the ESP32 firmware's switch statement
+    
+    /// The byte values must exactly match the ".ino" action constants
+
+    /// - Parameter action: The schedule action to encode
+    /// - Returns: A "UInt8" action byte for inclusion in the schedule payload
     private func actionByte(for action: ScheduleAction) -> UInt8 {
         switch action {
         case .powerOn:          return 0
@@ -434,17 +419,16 @@ class BLEManager: NSObject, ObservableObject {
         }
     }
 
-    /// Writes a single schedule entry into a specific flash slot on the ESP32.
-    ///
-    /// Encodes the schedule into a 9-byte payload:
-    /// [command=1, slot, hour, minute, action, brightness, colourTemp, daysMask, isEnabled].
-    /// The `daysMask` is a bitmask where bit 0 = Monday … bit 6 = Sunday.
-    ///
-    /// No-op in Simulator Mode or if `slot` is out of range (≥ 20).
-    ///
+    /// Writes a single schedule entry into a specific flash slot on the ESP32
+    
+    /// Encodes the schedule into a 9-byte payload: [command=1, slot, hour, minute, action, brightness, colourTemp, daysMask, isEnabled]
+    /// The "daysMask" is a bitmask where bit 0 = Monday … bit 6 = Sunday
+
+    /// No-op in Simulator Mode or if `slot` is out of range (≥ 20)
+    
     /// - Parameters:
-    ///   - schedule: The `BulbSchedule` to encode and push.
-    ///   - slot: The zero-based flash slot index on the ESP32 (max 19).
+    ///   - schedule: The `BulbSchedule` to encode and push
+    ///   - slot: The zero-based flash slot index on the ESP32 (max 19)
     func pushSchedule(_ schedule: BulbSchedule, slot: Int) {
         if simulatorMode { return }
         guard let c = scheduleCharacteristic, slot < 20 else { return }
@@ -467,14 +451,13 @@ class BLEManager: NSObject, ObservableObject {
         print("📅 Pushed schedule slot \(slot): \(schedule.scheduleName) @ \(schedule.timeString)")
     }
 
-    /// Clears all schedule slots on the ESP32, then pushes the complete schedule list.
-    ///
-    /// Sends a command byte of 0 (clear all) first, then pushes each schedule with
-    /// a 150 ms delay between writes to avoid dropping BLE packets during a burst.
-    ///
-    /// No-op in Simulator Mode.
-    ///
-    /// - Parameter schedules: The full list of `BulbSchedule` values to push.
+    /// Clears all schedule slots on the ESP32, then pushes the complete schedule list
+    
+    /// Sends a command byte of 0 (clear all) first, then pushes each schedule with a 150 ms delay between writes to avoid dropping BLE packets during a burst
+
+    /// No-op in Simulator Mode
+    
+    /// - Parameter schedules: The full list of "BulbSchedule" values to push
     func pushAllSchedules(_ schedules: [BulbSchedule]) {
         if simulatorMode { return }
         guard let c = scheduleCharacteristic else { return }
@@ -489,12 +472,12 @@ class BLEManager: NSObject, ObservableObject {
         print("📅 Pushing \(schedules.count) schedules to ESP32")
     }
 
-    /// Sends a delete command for a single schedule slot to the ESP32.
-    ///
-    /// Encodes the command as a 2-byte payload [command=2, slot].
-    /// No-op in Simulator Mode or if `slot` is out of range (≥ 20).
-    ///
-    /// - Parameter slot: The zero-based flash slot index to delete (max 19).
+    /// Sends a delete command for a single schedule slot to the ESP32
+
+    /// Encodes the command as a 2-byte payload [command=2, slot]
+    /// No-op in Simulator Mode or if "slot" is out of range (≥ 20)
+
+    /// - Parameter slot: The zero-based flash slot index to delete (max 19)
     func deleteScheduleSlot(_ slot: Int) {
         if simulatorMode { return }
         guard let c = scheduleCharacteristic, slot < 20 else { return }
@@ -505,8 +488,8 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Bluetooth State Helper
 
-    /// Updates `bluetoothState` with a human-readable label based on the current
-    /// `CBCentralManager` state. Must be called on a thread safe for UI updates.
+    /// Updates "bluetoothState" with a human-readable label based on the current "CBCentralManager" state
+    /// Must be called on a thread safe for UI updates
     private func updateBluetoothStateMessage() {
         DispatchQueue.main.async {
             switch self.centralManager.state {
@@ -525,20 +508,19 @@ class BLEManager: NSObject, ObservableObject {
 
 extension BLEManager: CBCentralManagerDelegate {
 
-    /// Called whenever the central manager's Bluetooth state changes.
-    ///
-    /// In Simulator Mode, overrides the state label to "Simulator Mode".
-    /// In real hardware mode, updates the label via `updateBluetoothStateMessage`.
+    /// Called whenever the central manager's Bluetooth state changes
+
+    /// In Simulator Mode, overrides the state label to "Simulator Mode"
+    /// In real hardware mode, updates the label via "updateBluetoothStateMessage"
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if simulatorMode { bluetoothState = "Simulator Mode"; return }
         updateBluetoothStateMessage()
     }
 
-    /// Called each time a peripheral advertising `serviceUUID` is discovered.
-    ///
-    /// Creates a `SmartBulb` from the peripheral's identifier, name, and RSSI,
-    /// and appends it to `discoveredBulbs` if not already present.
-    /// No-op in Simulator Mode (simulated bulbs are injected via `startScanning`).
+    /// Called each time a peripheral advertising "serviceUUID" is discovered
+    
+    /// Creates a "SmartBulb" from the peripheral's identifier, name, and RSSI, and appends it to "discoveredBulbs" if not already present
+    /// No-op in Simulator Mode (simulated bulbs are injected via "startScanning")
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         if simulatorMode { return }
@@ -549,16 +531,15 @@ extension BLEManager: CBCentralManagerDelegate {
             rssi:        RSSI.intValue,
             isSimulated: false
         )
-        // De-duplicate — only add if this peripheral hasn't been discovered before
+        // De-duplicate, only add if this peripheral hasn't been discovered before
         if !discoveredBulbs.contains(where: { $0.id == bulb.id }) {
             discoveredBulbs.append(bulb)
         }
     }
 
-    /// Called when a peripheral connection is successfully established.
-    ///
-    /// Retains the peripheral, sets it as the delegate, marks it as connected
-    /// in `discoveredBulbs`, and begins service discovery.
+    /// Called when a peripheral connection is successfully established
+    
+    /// Retains the peripheral, sets it as the delegate, marks it as connected in "discoveredBulbs", and begins service discovery
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         if simulatorMode { return }
         connectedPeripheral = peripheral
@@ -572,10 +553,9 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheral.discoverServices([serviceUUID])
     }
 
-    /// Called when a peripheral disconnects, either intentionally or due to an error.
-    ///
-    /// Clears all connection state and cached characteristic references so
-    /// the manager is ready for a fresh connection attempt.
+    /// Called when a peripheral disconnects, either intentionally or due to an error
+    
+    /// Clears all connection state and cached characteristic references so the manager is ready for a fresh connection attempt
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         if simulatorMode { return }
         connectedPeripheral = nil
@@ -594,7 +574,7 @@ extension BLEManager: CBCentralManagerDelegate {
         timeCharacteristic       = nil
     }
 
-    /// Called when a connection attempt fails before being established.
+    /// Called when a connection attempt fails before being established
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         if simulatorMode { return }
         print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
@@ -605,10 +585,9 @@ extension BLEManager: CBCentralManagerDelegate {
 
 extension BLEManager: CBPeripheralDelegate {
 
-    /// Called when GATT service discovery completes for a connected peripheral.
-    ///
-    /// Iterates over the discovered services and triggers characteristic discovery
-    /// for those matching `serviceUUID`.
+    /// Called when GATT service discovery completes for a connected peripheral
+    
+    /// Iterates over the discovered services and triggers characteristic discovery for those matching "serviceUUID"
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if simulatorMode { return }
         guard error == nil, let services = peripheral.services else { return }
@@ -617,12 +596,10 @@ extension BLEManager: CBPeripheralDelegate {
         }
     }
 
-    /// Called when characteristic discovery completes for a GATT service.
-    ///
-    /// Caches each discovered characteristic reference, issues initial read requests
-    /// for control characteristics to sync `bulbState`, and subscribes to status
-    /// notifications. Once all characteristics are cached, syncs the current time
-    /// and pushes the full schedule list after a short stabilisation delay.
+    /// Called when characteristic discovery completes for a GATT service
+    
+    /// Caches each discovered characteristic reference, issues initial read requests for control characteristics to sync "bulbState", and subscribes to status notifications
+    /// Once all characteristics are cached, syncs the current time and pushes the full schedule list after a short stabilisation delay
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if simulatorMode { return }
         guard error == nil, let characteristics = service.characteristics else { return }
@@ -652,8 +629,7 @@ extension BLEManager: CBPeripheralDelegate {
                 break
             }
         }
-        // Sync time and push schedules after a short delay to ensure BLE
-        // negotiation has settled and all writes land successfully.
+        // Sync time and push schedules after a short delay to ensure BLE negotiation has settled and all writes land successfully
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.syncCurrentTime()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -662,11 +638,10 @@ extension BLEManager: CBPeripheralDelegate {
         }
     }
 
-    /// Called when a characteristic value is read or a subscribed notification arrives.
-    ///
-    /// Updates the corresponding field in `bulbState`. The status characteristic
-    /// delivers a 6-byte packet covering all state in one notification:
-    /// [power, brightness, warmValue, 0, coolValue, mode].
+    /// Called when a characteristic value is read or a subscribed notification arrives
+    
+    /// Updates the corresponding field in "bulbState"
+    /// The status characteristic delivers a 6-byte packet covering all state in one notification: [power, brightness, warmValue, 0, coolValue, mode]
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if simulatorMode { return }
         guard error == nil, let value = characteristic.value else { return }
@@ -693,7 +668,8 @@ extension BLEManager: CBPeripheralDelegate {
         }
     }
 
-    /// Called after a write-with-response completes. Logs any write errors.
+    /// Called after a write-with-response completes
+    /// Logs any write errors
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             print("Write error: \(error.localizedDescription)")

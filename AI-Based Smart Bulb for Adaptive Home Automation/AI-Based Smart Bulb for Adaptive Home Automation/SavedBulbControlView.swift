@@ -1,23 +1,75 @@
+// SavedBulbControlView.swift
+// AI-Based Smart Bulb for Adaptive Home Automation
+//
+// The full-screen control panel for a previously paired bulb. On appearance it
+// attempts a BLE connection and, once connected, exposes power, brightness,
+// colour-temperature, and effect controls. Also provides access to the schedule
+// editor and inline dialogs for renaming or removing the bulb.
+
 import SwiftUI
 
+// MARK: - Saved Bulb Control View
+
+/// The primary control surface for a bulb that has already been paired and
+/// saved to the user's account.
+///
+/// On appearance the view:
+/// 1. Registers the shared `BLEManager` with `ScheduleManager` so in-app
+///    schedule timers can dispatch commands even before the peripheral connects.
+/// 2. Calls `connectToBulb()` which handles both real and simulated peripherals.
+/// 3. Loads the bulb's schedule list so the in-app timer is primed.
+///
+/// Three top-level states are rendered inside the root `ZStack`:
+/// - **Connecting** – a centred spinner while BLE scanning is in progress.
+/// - **Connection failed** – an error card with retry / back actions.
+/// - **Connected** – a scrollable control panel (power, brightness, colour
+///   temperature, effects) together with a header row of icon buttons.
+///
+/// Two modal overlays (`showEditName`, `showDeleteConfirm`) are layered above
+/// the main content inside the same `ZStack`.
 struct SavedBulbControlView: View {
+
+    // MARK: Properties
+
+    /// The persisted bulb record supplied by the calling list view.
     let savedBulb: SavedBulb
 
+    /// Manages Bluetooth scanning, connection, and characteristic writes.
     @StateObject private var bleManager = BLEManager()
+
+    /// `true` while BLE scanning / connection is in progress.
     @State private var isConnecting = true
+
+    /// `true` when the scan timeout elapses without finding the peripheral.
     @State private var connectionFailed = false
+
+    /// Controls visibility of the destructive remove-bulb confirmation overlay.
     @State private var showDeleteConfirm = false
+
+    /// Controls visibility of the edit-name / edit-room inline dialog.
     @State private var showEditName = false
+
+    /// Staging value for the bulb-name text field in the edit dialog.
     @State private var editedName = ""
+
+    /// Staging value for the room-name text field in the edit dialog.
     @State private var editedRoom = ""
+
+    /// Dismisses this view when the user presses the back button or after
+    /// a successful delete.
     @Environment(\.dismiss) var dismiss
 
+    /// The email address of the currently logged-in user, read from
+    /// `UserDefaults`. Used when logging usage events to the server.
     private var userEmail: String {
         UserDefaults.standard.string(forKey: "currentUserEmail") ?? ""
     }
 
+    // MARK: Body
+
     var body: some View {
         ZStack {
+            // Soft purple-peach-mint tricolour gradient background
             LinearGradient(
                 colors: [
                     Color(red: 0.95, green: 0.92, blue: 1.0),
@@ -28,17 +80,22 @@ struct SavedBulbControlView: View {
             )
             .ignoresSafeArea()
 
+            // ── Connecting State ─────────────────────────────────────────────
             if isConnecting {
                 VStack(spacing: 20) {
                     ProgressView().scaleEffect(1.5)
                     Text("Connecting to \(savedBulb.bulb_name)...")
                         .font(.headline).foregroundColor(.gray)
                 }
+
+            // ── Connection-Failed State ──────────────────────────────────────
             } else if connectionFailed {
                 VStack(spacing: 20) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 60)).foregroundColor(.orange)
                     Text("Unable to Connect").font(.title2).bold()
+
+                    // Provide context-specific guidance for simulated vs real bulbs
                     if savedBulb.is_simulated {
                         Text("This is a simulated bulb. Make sure Simulator Mode is enabled in Settings.")
                             .font(.subheadline).foregroundColor(.gray)
@@ -48,19 +105,26 @@ struct SavedBulbControlView: View {
                             .font(.subheadline).foregroundColor(.gray)
                             .multilineTextAlignment(.center).padding(.horizontal, 40)
                     }
+
+                    // Reset state and attempt BLE connection again
                     Button("Try Again") {
                         isConnecting = true; connectionFailed = false; connectToBulb()
                     }
                     .buttonStyle(ModernButtonStyle(backgroundColor: .blue)).padding(.horizontal, 60)
+
                     Button("Go Back") { dismiss() }
                         .buttonStyle(ModernButtonStyle(backgroundColor: .gray)).padding(.horizontal, 60)
                 }
+
+            // ── Connected State ──────────────────────────────────────────────
             } else {
                 ScrollView {
                     VStack(spacing: 30) {
 
-                        // ── Header ──────────────────────────────────────────
+                        // ── Header ───────────────────────────────────────────
+                        // Row of icon buttons: back (left), schedule and more-menu (right)
                         HStack {
+                            // Disconnect BLE and pop the view
                             Button(action: { bleManager.disconnect(); dismiss() }) {
                                 Image(systemName: "arrow.left")
                                     .font(.system(size: 20, weight: .bold))
@@ -69,7 +133,7 @@ struct SavedBulbControlView: View {
 
                             Spacer()
 
-                            // Schedule button
+                            // Navigate to the schedule editor for this bulb
                             NavigationLink(destination: ScheduleView(bulbId: savedBulb.bulb_id,
                                                                       bulbName: savedBulb.bulb_name)) {
                                 Image(systemName: "calendar.badge.clock")
@@ -79,12 +143,14 @@ struct SavedBulbControlView: View {
                                 backgroundColor: Color(red: 0.4, green: 0.3, blue: 0.9),
                                 foregroundColor: .white))
 
+                            // Context menu: rename or remove the bulb
                             Menu {
                                 Button(action: {
                                     editedName = savedBulb.bulb_name
                                     editedRoom = savedBulb.room_name ?? ""
                                     showEditName = true
                                 }) { Label("Edit Name", systemImage: "pencil") }
+
                                 Button(role: .destructive, action: { showDeleteConfirm = true }) {
                                     Label("Remove Bulb", systemImage: "trash")
                                 }
@@ -95,15 +161,21 @@ struct SavedBulbControlView: View {
                         }
                         .padding(.horizontal).padding(.top, 30)
 
-                        // ── Bulb Visual ─────────────────────────────────────
+                        // ── Bulb Visual ──────────────────────────────────────
+                        // Animated illustration that reflects the current bulb state
                         BulbVisualView(state: bleManager.bulbState).padding(.top, 20)
 
-                        // ── Device name ─────────────────────────────────────
+                        // ── Device Name ──────────────────────────────────────
                         VStack(spacing: 5) {
                             Text(savedBulb.bulb_name).font(.title).bold()
+
+                            // Only show the room label when one has been assigned
                             if let room = savedBulb.room_name, !room.isEmpty {
                                 Text(room).font(.subheadline).foregroundColor(.gray)
                             }
+
+                            // Badge shown when either the saved record or the live
+                            // BLE manager is operating in simulator mode
                             if savedBulb.is_simulated || bleManager.simulatorMode {
                                 HStack(spacing: 6) {
                                     Image(systemName: "play.circle.fill").font(.caption)
@@ -115,7 +187,9 @@ struct SavedBulbControlView: View {
                             }
                         }
 
-                        // ── Power Toggle ────────────────────────────────────
+                        // ── Power Toggle ─────────────────────────────────────
+                        // Writes the new power state over BLE and logs the event
+                        // to the server for AI-based usage analysis.
                         Toggle("Power", isOn: Binding(
                             get: { bleManager.bulbState.power },
                             set: { newVal in
@@ -131,7 +205,9 @@ struct SavedBulbControlView: View {
                         .toggleStyle(SwitchToggleStyle(tint: .blue))
                         .padding().background(Color.white.opacity(0.7)).cornerRadius(15).padding(.horizontal)
 
-                        // ── Brightness ──────────────────────────────────────
+                        // ── Brightness ───────────────────────────────────────
+                        // Raw value is 0–255 (UInt8); the label converts to a 0–100 % percentage.
+                        // The drag-end gesture logs the final settled value to the server.
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Brightness: \(Int((Double(bleManager.bulbState.brightness) / 255.0) * 100))%")
                                 .font(.headline)
@@ -154,12 +230,15 @@ struct SavedBulbControlView: View {
                                 colourTemp: Int(bleManager.bulbState.colourTemp))
                         })
 
-                        // ── Colour Temperature ──────────────────────────────
+                        // ── Colour Temperature ────────────────────────────────
+                        // 0 = coolest (blue-white), 255 = warmest (amber).
+                        // A gradient-filled track visually reinforces the scale.
+                        // Three preset buttons jump to Cool (0), Neutral (128), and Warm (255).
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Colour Temperature")
                                 .font(.headline)
 
-                            // Labels
+                            // Cool / Warm end-point labels
                             HStack {
                                 Label("Cool", systemImage: "snowflake")
                                     .font(.caption).foregroundColor(Color(red: 0.75, green: 0.9, blue: 1))
@@ -168,14 +247,14 @@ struct SavedBulbControlView: View {
                                     .font(.caption).foregroundColor(Color(red: 1, green: 0.75, blue: 0.4))
                             }
 
-                            // Gradient track with slider overlaid
+                            // Gradient track with the interactive slider overlaid on top
                             ZStack(alignment: .center) {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(
                                         LinearGradient(
                                             colors: [
-                                                Color(red: 0.85, green: 0.95, blue: 1.0), // cool left
-                                                Color(red: 1.0,  green: 0.75, blue: 0.4)  // warm right
+                                                Color(red: 0.85, green: 0.95, blue: 1.0), // cool (left)
+                                                Color(red: 1.0,  green: 0.75, blue: 0.4)  // warm (right)
                                             ],
                                             startPoint: .leading,
                                             endPoint: .trailing
@@ -183,6 +262,8 @@ struct SavedBulbControlView: View {
                                     )
                                     .frame(height: 10)
 
+                                // Accent colour is cleared so the default blue thumb
+                                // does not obscure the gradient track
                                 Slider(
                                     value: Binding(
                                         get: { Double(bleManager.bulbState.colourTemp) },
@@ -194,7 +275,7 @@ struct SavedBulbControlView: View {
                                 .accentColor(.clear)
                             }
 
-                            // Presets
+                            // Quick-select preset buttons
                             HStack(spacing: 12) {
                                 Button(action: { bleManager.setColourTemp(0) }) {
                                     VStack(spacing: 4) {
@@ -244,7 +325,9 @@ struct SavedBulbControlView: View {
                                 colourTemp: Int(bleManager.bulbState.colourTemp))
                         })
 
-                        // ── Effects ─────────────────────────────────────────
+                        // ── Effects ──────────────────────────────────────────
+                        // mode 0 = Solid, mode 1 = Pulse. Additional modes can be
+                        // appended to the grid without layout changes.
                         VStack(alignment: .leading, spacing: 15) {
                             Text("Effects").font(.headline)
                             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 15) {
@@ -262,6 +345,8 @@ struct SavedBulbControlView: View {
             }
 
             // ── Edit Name Dialog ─────────────────────────────────────────────
+            // Modal card for renaming the bulb and reassigning its room.
+            // Staged edits are only committed when the user taps Save.
             if showEditName {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
@@ -278,6 +363,7 @@ struct SavedBulbControlView: View {
                         HStack(spacing: 15) {
                             Button("Cancel") { showEditName = false }
                                 .buttonStyle(ModernButtonStyle(backgroundColor: .gray))
+                            // Save is disabled until a non-empty bulb name is entered
                             Button("Save") { updateBulbDetails() }
                                 .buttonStyle(ModernButtonStyle(backgroundColor: .blue))
                                 .disabled(editedName.isEmpty)
@@ -288,6 +374,8 @@ struct SavedBulbControlView: View {
             }
 
             // ── Delete Confirmation ──────────────────────────────────────────
+            // Destructive overlay requiring explicit confirmation before the
+            // bulb record is removed from the user's account on the server.
             if showDeleteConfirm {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
@@ -346,7 +434,15 @@ struct SavedBulbControlView: View {
         }
     }
 
-    // MARK: - Sync UI after schedule fires (BLE already applied by ScheduleManager)
+    // MARK: - Sync UI After Schedule Fires
+
+    /// Updates the in-memory `bulbState` to reflect a schedule action that
+    /// `ScheduleManager.executeSchedule` has already dispatched over BLE.
+    ///
+    /// Called in response to a `.scheduleTriggered` notification, ensuring the
+    /// on-screen controls stay in sync without issuing a redundant BLE write.
+    ///
+    /// - Parameter schedule: The `BulbSchedule` that was just executed.
     func syncUIState(from schedule: BulbSchedule) {
         switch schedule.action {
         case .powerOn:
@@ -354,10 +450,12 @@ struct SavedBulbControlView: View {
         case .powerOff:
             bleManager.bulbState.power = false
         case .dimWarm:
+            // Dims to the scheduled brightness and shifts to warm white (255)
             bleManager.bulbState.power = true
             bleManager.bulbState.brightness = UInt8(schedule.brightness)
             bleManager.bulbState.colourTemp = 255
         case .brightenCool:
+            // Brightens to the scheduled level and shifts to cool white (0)
             bleManager.bulbState.power = true
             bleManager.bulbState.brightness = UInt8(schedule.brightness)
             bleManager.bulbState.colourTemp = 0
@@ -369,6 +467,16 @@ struct SavedBulbControlView: View {
     }
 
     // MARK: - Connect
+
+    /// Initiates a BLE connection to the peripheral identified by `savedBulb`.
+    ///
+    /// **Simulated path** – if the saved record is flagged as simulated, checks
+    /// that simulator mode is active, then after a 1-second artificial delay
+    /// constructs a fake `SmartBulb` and calls `bleManager.connect(to:)`.
+    ///
+    /// **Real path** – starts BLE scanning and polls `discoveredBulbs` after 5 s.
+    /// If the peripheral has not appeared a second 5-second window is allowed
+    /// before marking the connection as failed and stopping the scan.
     func connectToBulb() {
         if savedBulb.is_simulated {
             guard bleManager.simulatorMode else { isConnecting = false; connectionFailed = true; return }
@@ -382,12 +490,17 @@ struct SavedBulbControlView: View {
             }
             return
         }
+
+        // Real-hardware path: simulator mode must be off
         guard !bleManager.simulatorMode else { isConnecting = false; connectionFailed = true; return }
         bleManager.startScanning()
+
+        // First scan window — 5 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             if let bulb = bleManager.discoveredBulbs.first(where: { $0.id.uuidString == savedBulb.bulb_id }) {
                 bleManager.connect(to: bulb); isConnecting = false
             } else {
+                // Second scan window — additional 5 seconds before giving up
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                     if let bulb = bleManager.discoveredBulbs.first(where: { $0.id.uuidString == savedBulb.bulb_id }) {
                         bleManager.connect(to: bulb); isConnecting = false
@@ -399,6 +512,12 @@ struct SavedBulbControlView: View {
         }
     }
 
+    // MARK: - Update Bulb Details
+
+    /// Persists a renamed bulb and/or updated room assignment to the server.
+    ///
+    /// Trims whitespace from both fields before posting to `/update_bulb`.
+    /// Dismisses the edit dialog on completion regardless of the server response.
     func updateBulbDetails() {
         guard let userEmail = UserDefaults.standard.string(forKey: "currentUserEmail") else { return }
         NetworkManager.shared.post(endpoint: "/update_bulb", body: [
@@ -408,6 +527,13 @@ struct SavedBulbControlView: View {
         ]) { _ in showEditName = false }
     }
 
+    // MARK: - Delete Bulb
+
+    /// Removes the bulb from the user's account on the server, then disconnects
+    /// BLE and dismisses this view.
+    ///
+    /// The bulb hardware itself is unaffected and can be paired to a different
+    /// account afterwards.
     func deleteBulb() {
         guard let userEmail = UserDefaults.standard.string(forKey: "currentUserEmail") else { return }
         NetworkManager.shared.post(endpoint: "/delete_bulb",
@@ -416,6 +542,8 @@ struct SavedBulbControlView: View {
         }
     }
 }
+
+// MARK: - Preview
 
 struct SavedBulbControlView_Previews: PreviewProvider {
     static var previews: some View {

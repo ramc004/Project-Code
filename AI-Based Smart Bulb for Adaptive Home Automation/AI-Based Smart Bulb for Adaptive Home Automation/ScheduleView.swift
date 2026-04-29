@@ -1,24 +1,56 @@
+// ScheduleView.swift
+// AI-Based Smart Bulb for Adaptive Home Automation
+
+// Presents the full scheduling interface for a single bulb, combining a user-managed schedule list,
+// AI-generated suggestions derived from usage patterns, and optional Apple Health sleep-linked automation
+//
+// The view is split into two tabs — "My Schedules" and "AI Suggestions" — and surfaces relevant
+// HealthKit banners depending on the current authorisation state. Sheet overlays allow the user to
+// add a new schedule, edit an existing one, and manage HealthKit permission from within the same screen
+
 import SwiftUI
 import HealthKit
 
 // MARK: - Main Schedule View
 
+/// The root view of the scheduling feature, scoped to a single bulb identified by "bulbId" and "bulbName"
+///
+/// Owns the tab switcher between "My Schedules" and "AI Suggestions", the header with the auto/manual mode toggle,
+/// all Health-related banners, and the sheet presentations for adding, editing, and managing HealthKit access
+///
+/// On appearance, "ScheduleManager" is instructed to reload schedules, reload suggestions, and trigger a fresh
+/// usage analysis for the given bulb so all three data sources are up to date when the view first renders
 struct ScheduleView: View {
     let bulbId: String
     let bulbName: String
 
+    /// The shared schedule manager, observed for schedule list, suggestion list, loading states, and HealthKit status
     @StateObject private var manager = ScheduleManager.shared
+
+    /// Controls presentation of the "AddScheduleSheet" modal
     @State private var showAddSheet = false
+
+    /// The schedule currently being edited; setting a non-nil value triggers the "EditScheduleSheet" modal
     @State private var editingSchedule: BulbSchedule?
+
+    /// Controls the alert that explains and toggles between Auto and Manual scheduling modes
     @State private var showAutoToggleInfo = false
+
+    /// Controls presentation of the "HealthPermissionSheet" modal
     @State private var showHealthPermission = false
+
+    /// Controls presentation of the "HealthRevokeSheet" modal
     @State private var showHealthRevoke = false
-    @State private var selectedTab = 0   // 0=Schedules 1=Suggestions
+
+    /// The currently active tab: 0 = My Schedules, 1 = AI Suggestions
+    @State private var selectedTab = 0
+
+    /// Used to dismiss this view and return to the previous screen
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
         ZStack {
-            // Background
+            // Deep navy-to-purple diagonal gradient used as the global background
             LinearGradient(
                 colors: [
                     Color(red: 0.08, green: 0.08, blue: 0.15),
@@ -32,6 +64,7 @@ struct ScheduleView: View {
             VStack(spacing: 0) {
 
                 // ── Header ────────────────────────────────────────────────
+                // Back button, bulb name subtitle, auto/manual mode pill, and add (+) button
                 HStack(spacing: 14) {
                     Button(action: { dismiss() }) {
                         Image(systemName: "arrow.left")
@@ -53,7 +86,9 @@ struct ScheduleView: View {
 
                     Spacer()
 
-                    // Auto mode pill
+                    // Auto/Manual mode pill
+                    // Tapping opens an alert that explains the difference and lets the user switch
+                    // Green pill = Auto (schedules fire automatically); white = Manual (suggestions only)
                     Button(action: { showAutoToggleInfo = true }) {
                         HStack(spacing: 6) {
                             Image(systemName: manager.autoScheduleEnabled ? "cpu.fill" : "hand.tap.fill")
@@ -70,7 +105,7 @@ struct ScheduleView: View {
                         .clipShape(Capsule())
                     }
 
-                    // Add button
+                    // Add schedule button — opens AddScheduleSheet
                     Button(action: { showAddSheet = true }) {
                         Image(systemName: "plus")
                             .font(.system(size: 17, weight: .semibold))
@@ -85,6 +120,10 @@ struct ScheduleView: View {
                 .padding(.bottom, 20)
 
                 // ── Health Banner ─────────────────────────────────────────
+                // Three mutually exclusive states are handled:
+                // 1. HealthKit is available but not yet authorised → prompt banner
+                // 2. HealthKit is authorised and sleep data is loaded → sleep summary banner
+                // 3. HealthKit is authorised but sleep data not yet available → "linked, waiting" banner
                 if manager.healthKitAvailable && !manager.healthKitAuthorised {
                     HealthPermissionBanner { showHealthPermission = true }
                         .padding(.horizontal, 20)
@@ -97,14 +136,16 @@ struct ScheduleView: View {
                         .padding(.horizontal, 20)
                         .padding(.bottom, 14)
                     } else {
-                        // Authorised but no sleep data yet
+                        // Authorised but no sleep data yet available from Apple Health
                         SleepLinkedBanner { showHealthRevoke = true }
                             .padding(.horizontal, 20)
                             .padding(.bottom, 14)
                     }
                 }
 
-                // ── Segment ───────────────────────────────────────────────
+                // ── Segment Picker ────────────────────────────────────────
+                // Two-tab underline picker switching between "My Schedules" and "AI Suggestions"
+                // A red count badge is shown on the Suggestions tab when pending suggestions exist
                 HStack(spacing: 0) {
                     ForEach(["My Schedules", "AI Suggestions"], id: \.self) { tab in
                         let idx = tab == "My Schedules" ? 0 : 1
@@ -127,7 +168,7 @@ struct ScheduleView: View {
                             .padding(.vertical, 10)
                         }
 
-                        // Badge on suggestions
+                        // Red count badge overlaid on the Suggestions tab when pending suggestions exist
                         .overlay(alignment: .topTrailing) {
                             if idx == 1 && !manager.suggestions.isEmpty {
                                 Text("\(manager.suggestions.count)")
@@ -147,7 +188,8 @@ struct ScheduleView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
 
-                // ── Content ───────────────────────────────────────────────
+                // ── Tab Content ───────────────────────────────────────────
+                // Renders either ScheduleListTab or SuggestionsTab depending on the selected segment
                 if selectedTab == 0 {
                     ScheduleListTab(
                         schedules: manager.schedules,
@@ -188,6 +230,7 @@ struct ScheduleView: View {
         .sheet(isPresented: $showHealthRevoke) {
             HealthRevokeSheet()
         }
+        // Alert explaining Auto vs Manual mode with a single toggle action
         .alert("Scheduling Mode", isPresented: $showAutoToggleInfo) {
             Button(manager.autoScheduleEnabled ? "Switch to Manual" : "Enable Auto") {
                 manager.setAutoSchedule(enabled: !manager.autoScheduleEnabled)
@@ -198,6 +241,7 @@ struct ScheduleView: View {
                  ? "Auto mode fires schedules automatically. Switch to Manual to only receive suggestions."
                  : "Manual mode shows suggestions for you to approve. Enable Auto to fire schedules automatically.")
         }
+        // Trigger all three data loads on first appearance so the view is fully populated
         .onAppear {
             manager.loadSchedules(for: bulbId)
             manager.loadSuggestions(for: bulbId)
@@ -208,12 +252,30 @@ struct ScheduleView: View {
 
 // MARK: - Schedule List Tab
 
+/// The content of the "My Schedules" tab
+///
+/// Shows a loading spinner while "isLoading" is true, an empty-state prompt when there are no schedules,
+/// or a scrollable "LazyVStack" of "ScheduleCard" rows when schedules are present
+///
+/// All user interactions (toggle, delete, edit, add) are forwarded to the parent view via closures
+/// so that "ScheduleView" remains the single owner of "ScheduleManager"
 struct ScheduleListTab: View {
+    /// The current list of schedules to display
     let schedules: [BulbSchedule]
+
+    /// When true a loading spinner is shown instead of the schedule list or empty state
     let isLoading: Bool
+
+    /// Called when the user flips the enable/disable toggle on a schedule row; receives the schedule ID and new state
     let onToggle: (Int, Bool) -> Void
+
+    /// Called when the user selects "Delete" from a schedule row's context menu; receives the schedule ID
     let onDelete: (Int) -> Void
+
+    /// Called when the user selects "Edit" from a schedule row's context menu; receives the full schedule model
     let onEdit: (BulbSchedule) -> Void
+
+    /// Called when the user taps the "Add Schedule" button in the empty state
     let onAdd: () -> Void
 
     var body: some View {
@@ -222,6 +284,7 @@ struct ScheduleListTab: View {
             ProgressView().tint(.white).scaleEffect(1.3)
             Spacer()
         } else if schedules.isEmpty {
+            // Empty state with a calendar icon, descriptive text, and a primary "Add Schedule" CTA
             Spacer()
             VStack(spacing: 16) {
                 Image(systemName: "calendar.badge.clock")
@@ -268,12 +331,29 @@ struct ScheduleListTab: View {
 
 // MARK: - Schedule Card
 
+/// A single row in the schedule list representing one "BulbSchedule"
+///
+/// Displays the trigger time in monospaced digits, a coloured vertical accent bar whose colour reflects
+/// the scheduled action, the schedule name, action label, and source badge
+///
+/// The enable/disable toggle is managed with local "@State" so it responds instantly without waiting
+/// for a network round-trip; the change is also forwarded to the parent via "onToggle"
+///
+/// An ellipsis context menu provides "Edit" and "Delete" actions forwarded to the parent via closures
 struct ScheduleCard: View {
+    /// The schedule model to display
     let schedule: BulbSchedule
+
+    /// Called when the user flips the toggle; receives the new enabled state
     let onToggle: (Bool) -> Void
+
+    /// Called when the user taps "Delete" in the context menu
     let onDelete: () -> Void
+
+    /// Called when the user taps "Edit" in the context menu
     let onEdit: () -> Void
 
+    /// Local copy of the enabled state so the toggle animates immediately without a network round-trip
     @State private var isEnabled: Bool
 
     init(schedule: BulbSchedule, onToggle: @escaping (Bool) -> Void, onDelete: @escaping () -> Void, onEdit: @escaping () -> Void) {
@@ -284,6 +364,13 @@ struct ScheduleCard: View {
         _isEnabled = State(initialValue: schedule.isEnabled)
     }
 
+    /// The accent colour of the vertical bar and action label, derived from the schedule's action type
+    ///
+    /// - Green:  Power On
+    /// - Red:    Power Off
+    /// - Amber:  Dim Warm
+    /// - Blue:   Brighten Cool
+    /// - Purple: Any other action
     var actionColour: Color {
         switch schedule.action {
         case .powerOn:          return Color(red: 0.3, green: 0.9, blue: 0.5)
@@ -296,7 +383,7 @@ struct ScheduleCard: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // Time block
+            // Time block — hour and minute stacked in monospaced digits
             VStack(spacing: 2) {
                 Text(String(format: "%02d", schedule.triggerHour))
                     .font(.system(size: 22, weight: .bold, design: .monospaced))
@@ -307,12 +394,12 @@ struct ScheduleCard: View {
             }
             .frame(width: 46)
 
-            // Divider
+            // Vertical accent bar — colour reflects action type; fades when disabled
             RoundedRectangle(cornerRadius: 2)
                 .fill(actionColour.opacity(isEnabled ? 0.7 : 0.2))
                 .frame(width: 3, height: 44)
 
-            // Info
+            // Schedule name and action/source labels
             VStack(alignment: .leading, spacing: 5) {
                 Text(schedule.scheduleName)
                     .font(.system(size: 15, weight: .semibold))
@@ -322,6 +409,7 @@ struct ScheduleCard: View {
                     Label(schedule.action.displayName, systemImage: schedule.action.icon)
                         .font(.system(size: 11))
                         .foregroundColor(actionColour.opacity(isEnabled ? 1 : 0.4))
+                    // Source badge is only shown for non-manually-created schedules (e.g. AI-accepted)
                     if schedule.source != "manual" {
                         Label(schedule.sourceLabel, systemImage: schedule.sourceIcon)
                             .font(.system(size: 10))
@@ -332,7 +420,7 @@ struct ScheduleCard: View {
 
             Spacer()
 
-            // Toggle + menu — larger tap targets
+            // Enable/disable toggle and ellipsis context menu with Edit and Delete actions
             HStack(spacing: 12) {
                 Toggle("", isOn: $isEnabled)
                     .labelsHidden()
@@ -368,14 +456,39 @@ struct ScheduleCard: View {
 
 // MARK: - Suggestions Tab
 
+/// The content of the "AI Suggestions" tab
+///
+/// Shows a loading spinner with a descriptive message while "isLoading" is true,
+/// an empty state encouraging continued usage when there are no suggestions,
+/// or a scrollable list of "SuggestionCard" rows when suggestions are present
+///
+/// If more than one suggestion exists an "Accept All" button is shown above the list so the user can
+/// convert all pending suggestions into active schedules in a single tap
+///
+/// A "SleepHintBanner" is shown at the top of the populated state whenever sleep data is available
 struct SuggestionsTab: View {
+    /// The current list of AI-generated schedule suggestions to display
     let suggestions: [ScheduleSuggestion]
+
+    /// When true a loading spinner and analysis message are shown instead of the suggestion list
     let isLoading: Bool
+
+    /// The user's detected sleep bedtime from Apple Health, used to populate the sleep hint banner
     let sleepBedtime: Date?
+
+    /// The user's detected wake time from Apple Health, used to populate the sleep hint banner
     let sleepWakeTime: Date?
+
+    /// Called when the user accepts a suggestion; receives the suggestion ID
     let onAccept: (Int) -> Void
+
+    /// Called when the user dismisses a suggestion; receives the suggestion ID
     let onDismiss: (Int) -> Void
+
+    /// Called when the user taps "Accept All" to auto-accept every pending suggestion at once
     let onAutoAcceptAll: () -> Void
+
+    /// Called when the user taps "Analyse Now" in the empty state to trigger a fresh usage analysis
     let onRefresh: () -> Void
 
     var body: some View {
@@ -389,6 +502,7 @@ struct SuggestionsTab: View {
             }
             Spacer()
         } else if suggestions.isEmpty {
+            // Empty state with a waveform icon, explanatory text, and an "Analyse Now" trigger button
             Spacer()
             VStack(spacing: 16) {
                 Image(systemName: "waveform.path.ecg")
@@ -416,14 +530,14 @@ struct SuggestionsTab: View {
             Spacer()
         } else {
             VStack(spacing: 0) {
-                // Sleep hint banner inside suggestions tab
+                // Sleep hint banner shown above the list when sleep data is available
                 if let bedtime = sleepBedtime, let wake = sleepWakeTime {
                     SleepHintBanner(bedtime: bedtime, wakeTime: wake)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 12)
                 }
 
-                // Accept all button
+                // "Accept All" button shown only when two or more suggestions are pending
                 if suggestions.count > 1 {
                     Button(action: onAutoAcceptAll) {
                         HStack(spacing: 8) {
@@ -462,11 +576,29 @@ struct SuggestionsTab: View {
 
 // MARK: - Suggestion Card
 
+/// A card view representing a single AI-generated schedule suggestion
+///
+/// Displays the suggestion's source type (sleep-linked or AI-detected), its readable schedule type,
+/// a confidence percentage badge colour-coded from green (high) through amber to yellow (low),
+/// detail pills for time/window, action, and observation count, and an optional brightness preview bar
+///
+/// "Accept" converts the suggestion into an active schedule via the parent's "onAccept" closure;
+/// "Dismiss" removes it permanently via "onDismiss"
 struct SuggestionCard: View {
+    /// The suggestion model to display
     let suggestion: ScheduleSuggestion
+
+    /// Called when the user taps "Add Schedule" to accept this suggestion
     let onAccept: () -> Void
+
+    /// Called when the user taps "Dismiss" to remove this suggestion
     let onDismiss: () -> Void
 
+    /// The colour of the confidence badge and "Accept" button, derived from the confidence score
+    ///
+    /// - Green:  confidence ≥ 0.68 (high)
+    /// - Amber:  confidence ≥ 0.52 (medium)
+    /// - Yellow: confidence < 0.52 (low)
     var confidenceColour: Color {
         suggestion.confidence >= 0.68 ? Color(red: 0.2, green: 0.85, blue: 0.5) :
         suggestion.confidence >= 0.52 ? Color(red: 1.0, green: 0.65, blue: 0.2) :
@@ -475,7 +607,7 @@ struct SuggestionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Top row
+            // Top row: source badge (sleep-linked or AI-detected), readable type name, and confidence badge
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
@@ -496,7 +628,7 @@ struct SuggestionCard: View {
                 }
                 Spacer()
 
-                // Confidence badge
+                // Confidence badge: percentage in monospaced digits with a "confidence" label beneath
                 VStack(spacing: 2) {
                     Text("\(suggestion.confidencePercent)%")
                         .font(.system(size: 18, weight: .bold, design: .monospaced))
@@ -507,7 +639,7 @@ struct SuggestionCard: View {
                 }
             }
 
-            // Details row
+            // Detail pills: time/window, action, and observation count (observation count omitted for sleep-based suggestions)
             HStack(spacing: 16) {
                 DetailPill(icon: "clock.fill",
                            text: suggestion.isSleepBased ? suggestion.timeString : suggestion.windowString,
@@ -524,7 +656,8 @@ struct SuggestionCard: View {
                 }
             }
 
-            // Brightness preview bar
+            // Brightness preview bar — only shown for actions that have a meaningful brightness value
+            // The gradient direction reflects colour temperature: warm gradients flow right-to-left, cool left-to-right
             if suggestion.action != .powerOff && suggestion.action != .powerOn {
                 HStack(spacing: 10) {
                     Image(systemName: "sun.min.fill").font(.system(size: 10)).foregroundColor(.white.opacity(0.3))
@@ -547,7 +680,8 @@ struct SuggestionCard: View {
                 }
             }
 
-            // Action buttons
+            // Accept and Dismiss action buttons
+            // "Accept" adopts the confidence colour; "Dismiss" uses a neutral translucent style
             HStack(spacing: 10) {
                 Button(action: onDismiss) {
                     Label("Dismiss", systemImage: "xmark")
@@ -582,8 +716,19 @@ struct SuggestionCard: View {
     }
 }
 
+/// A compact three-line pill used inside "SuggestionCard" to display an icon, a primary value, and a label
+///
+/// Used for time/window, action, and observation count detail items
 struct DetailPill: View {
-    let icon: String; let text: String; let label: String
+    /// The SF Symbol name to display above the value
+    let icon: String
+
+    /// The primary value text (e.g. "21:00", "Dim Warm", "12×")
+    let text: String
+
+    /// The secondary label beneath the value (e.g. "Time", "Action", "Observed")
+    let label: String
+
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 5) {
@@ -601,8 +746,13 @@ struct DetailPill: View {
 
 // MARK: - Health Banners
 
+/// A tappable banner shown when HealthKit is available but not yet authorised
+///
+/// Tapping opens the "HealthPermissionSheet" via the "onTap" closure so the user can grant sleep access
 struct HealthPermissionBanner: View {
+    /// Called when the banner is tapped; should present the HealthKit permission sheet
     let onTap: () -> Void
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 14) {
@@ -633,10 +783,18 @@ struct HealthPermissionBanner: View {
     }
 }
 
-/// Shown when authorised + sleep data loaded — tapping opens revoke sheet
+/// A tappable banner shown when HealthKit is authorised and sleep data has been successfully loaded
+///
+/// Displays the detected bedtime and wake time; tapping opens the "HealthRevokeSheet" via "onManage"
+/// so the user can review or revoke access
 struct SleepSummaryBanner: View {
+    /// The detected sleep bedtime from Apple Health
     let bedtime: Date
+
+    /// The detected wake time from Apple Health
     let wakeTime: Date
+
+    /// Called when the banner is tapped; should present the HealthKit revoke/manage sheet
     let onManage: () -> Void
 
     private let fmt: DateFormatter = {
@@ -673,9 +831,14 @@ struct SleepSummaryBanner: View {
     }
 }
 
-/// Shown when authorised but no sleep data yet
+/// A tappable banner shown when HealthKit is authorised but sleep data is not yet available
+///
+/// Informs the user that access has been granted and sleep data will appear once Apple Health has recorded it;
+/// tapping opens the "HealthRevokeSheet" via "onManage"
 struct SleepLinkedBanner: View {
+    /// Called when the banner is tapped; should present the HealthKit revoke/manage sheet
     let onManage: () -> Void
+
     var body: some View {
         Button(action: onManage) {
             HStack(spacing: 14) {
@@ -706,13 +869,19 @@ struct SleepLinkedBanner: View {
     }
 }
 
-/// Small inline hint shown in Suggestions tab when sleep data is available
+/// A compact non-interactive inline banner shown at the top of the Suggestions tab
+/// when sleep data is available, reminding the user which bedtime and wake time are active
 struct SleepHintBanner: View {
+    /// The detected sleep bedtime from Apple Health
     let bedtime: Date
+
+    /// The detected wake time from Apple Health
     let wakeTime: Date
+
     private let fmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
     }()
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "moon.zzz.fill")
@@ -732,9 +901,21 @@ struct SleepHintBanner: View {
 
 // MARK: - Health Permission Sheet
 
+/// A full-screen modal that requests HealthKit sleep access
+///
+/// Describes the three benefits of connecting Apple Health (wind-down dim, gentle wake-up, read-only access),
+/// then calls "ScheduleManager.requestHealthKitPermission" when the user taps "Allow Health Access"
+///
+/// On success the sheet dismisses automatically after 1.5 seconds; on failure an inline message
+/// instructs the user to enable access manually via Settings → Health
 struct HealthPermissionSheet: View {
+    /// Used to dismiss this sheet once permission has been granted or the user taps "Not Now"
     @Environment(\.dismiss) var dismiss
+
+    /// True while the HealthKit permission request is in flight
     @State private var requesting = false
+
+    /// An inline status message shown after the permission request completes, indicating success or failure
     @State private var result: String = ""
 
     var body: some View {
@@ -758,6 +939,7 @@ struct HealthPermissionSheet: View {
                         .padding(.horizontal, 20)
                 }
 
+                // Feature list explaining what HealthKit access enables
                 VStack(alignment: .leading, spacing: 16) {
                     HealthFeatureRow(icon: "moon.fill", colour: Color(red: 0.6, green: 0.4, blue: 1.0),
                                      title: "Wind-down Dim",
@@ -774,6 +956,7 @@ struct HealthPermissionSheet: View {
                 .cornerRadius(18)
                 .padding(.horizontal, 20)
 
+                // Inline status message shown after the permission request resolves
                 if !result.isEmpty {
                     Text(result)
                         .font(.system(size: 13))
@@ -782,6 +965,7 @@ struct HealthPermissionSheet: View {
                         .padding(.horizontal, 20)
                 }
 
+                // Primary CTA: shows a spinner while the request is in flight
                 Button(action: requestAccess) {
                     HStack(spacing: 8) {
                         if requesting { ProgressView().tint(.black).scaleEffect(0.8) }
@@ -806,6 +990,10 @@ struct HealthPermissionSheet: View {
         }
     }
 
+    /// Initiates the HealthKit permission request via "ScheduleManager"
+    ///
+    /// Sets "requesting" to true while the system prompt is displayed, then updates "result" with a
+    /// success or failure message; on success the sheet is dismissed after a 1.5-second delay
     func requestAccess() {
         requesting = true
         ScheduleManager.shared.requestHealthKitPermission { success, _ in
@@ -820,7 +1008,15 @@ struct HealthPermissionSheet: View {
 
 // MARK: - Health Revoke Sheet
 
+/// A full-screen modal shown when the user taps the sleep banner while HealthKit is already authorised
+///
+/// Confirms that sleep data is actively linked, explains that the app has read-only access, and provides
+/// step-by-step instructions for revoking access via the Health app
+///
+/// iOS does not expose a programmatic HealthKit revoke API, so the sheet uses a deep link to open
+/// the Health app directly and guides the user through the manual revoke flow
 struct HealthRevokeSheet: View {
+    /// Used to dismiss this sheet when the user taps "Done"
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -844,6 +1040,7 @@ struct HealthRevokeSheet: View {
                         .padding(.horizontal, 20)
                 }
 
+                // Status rows confirming the current state of the HealthKit connection
                 VStack(spacing: 12) {
                     HealthFeatureRow(
                         icon: "checkmark.circle.fill",
@@ -863,13 +1060,14 @@ struct HealthRevokeSheet: View {
                 .cornerRadius(18)
                 .padding(.horizontal, 20)
 
-                // Revoke instructions — iOS doesn't expose a programmatic revoke API,
-                // so we direct the user to Settings > Health as Apple requires.
+                // Revoke instructions — iOS does not expose a programmatic revoke API,
+                // so the user is directed to Settings > Health as Apple requires
                 VStack(spacing: 16) {
                     Text("To revoke access:")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.white.opacity(0.5))
 
+                    // Numbered step list guiding the user through the Health app revoke flow
                     VStack(alignment: .leading, spacing: 10) {
                         RevokeStep(number: "1", text: "Open the Health app")
                         RevokeStep(number: "2", text: "Tap your profile photo → Apps")
@@ -880,6 +1078,7 @@ struct HealthRevokeSheet: View {
                     .cornerRadius(14)
                     .padding(.horizontal, 20)
 
+                    // Deep link button that opens the Health app directly
                     Button(action: openHealthSettings) {
                         Label("Open Health App", systemImage: "heart.fill")
                             .font(.system(size: 15, weight: .semibold))
@@ -901,6 +1100,7 @@ struct HealthRevokeSheet: View {
         }
     }
 
+    /// Opens the Apple Health app using the "x-apple-health://" deep link URL scheme
     func openHealthSettings() {
         if let url = URL(string: "x-apple-health://") {
             UIApplication.shared.open(url)
@@ -908,9 +1108,16 @@ struct HealthRevokeSheet: View {
     }
 }
 
+/// A numbered step row used inside "HealthRevokeSheet" to present a single revoke instruction
+///
+/// Renders a filled circle containing the step number alongside the instruction text
 struct RevokeStep: View {
+    /// The step number displayed inside the circle (e.g. "1", "2", "3")
     let number: String
+
+    /// The instruction text displayed to the right of the number circle
     let text: String
+
     var body: some View {
         HStack(spacing: 12) {
             Text(number)
@@ -926,8 +1133,21 @@ struct RevokeStep: View {
     }
 }
 
+/// A labelled icon row used in "HealthPermissionSheet" and "HealthRevokeSheet"
+/// to summarise a single HealthKit feature or status item
 struct HealthFeatureRow: View {
-    let icon: String; let colour: Color; let title: String; let desc: String
+    /// The SF Symbol name to display on the left
+    let icon: String
+
+    /// The tint colour applied to the icon
+    let colour: Color
+
+    /// The bold title text
+    let title: String
+
+    /// The secondary description text beneath the title
+    let desc: String
+
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: icon).font(.system(size: 20)).foregroundColor(colour).frame(width: 28)
@@ -941,22 +1161,54 @@ struct HealthFeatureRow: View {
 
 // MARK: - Add Schedule Sheet
 
+/// A modal sheet for creating a new schedule for the given bulb
+///
+/// Collects a schedule name, trigger time, action type, brightness, colour temperature, and repeat days
+/// from the user via form controls, then submits a "NewScheduleRequest" to "ScheduleManager.addSchedule"
+///
+/// Brightness and colour temperature controls are hidden when the selected action is "Power On" or "Power Off"
+/// since those actions do not use those parameters
+///
+/// A "SleepHintBanner" is shown at the top of the form when sleep data is available from Apple Health,
+/// nudging the user to align the new schedule with their detected sleep/wake times
 struct AddScheduleSheet: View {
+    /// The identifier of the bulb this schedule will be attached to
     let bulbId: String
+
+    /// The display name of the bulb, shown in the hint banner context
     let bulbName: String
 
+    /// The shared schedule manager, observed to access sleep data for the hint banner and to call "addSchedule"
     @StateObject private var manager = ScheduleManager.shared
+
+    /// Used to dismiss this sheet after a successful save
     @Environment(\.dismiss) var dismiss
 
+    /// The schedule name entered by the user; the "Save" button is disabled until this is non-empty
     @State private var name = ""
+
+    /// The action the schedule will perform at its trigger time
     @State private var selectedAction: ScheduleAction = .powerOn
+
+    /// The time of day at which the schedule fires; hour and minute components are extracted on save
     @State private var triggerTime = Date()
+
+    /// The brightness value (0–255) to apply when the schedule fires
     @State private var brightness: Double = 200
+
+    /// The colour temperature value (0–255) to apply when the schedule fires; 0 = cool, 255 = warm
     @State private var colourTemp: Double = 128
+
+    /// A seven-element array of booleans representing Monday through Sunday repeat selection
     @State private var daysSelected = [true, true, true, true, true, true, true]
+
+    /// True while the save request is in flight to prevent duplicate submissions
     @State private var saving = false
+
+    /// An inline error message shown when the save request fails
     @State private var error = ""
 
+    /// Single-character day labels for the repeat day selector, Monday through Sunday
     private let dayLabels = ["M","T","W","T","F","S","S"]
 
     var body: some View {
@@ -965,7 +1217,8 @@ struct AddScheduleSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
 
-                    // Header
+                    // Header with Cancel, title, and Save buttons
+                    // Save is disabled when the name field is empty or a save is already in flight
                     HStack {
                         Button("Cancel") { dismiss() }
                             .foregroundColor(.white.opacity(0.5))
@@ -979,12 +1232,12 @@ struct AddScheduleSheet: View {
                     }
                     .padding(.top, 10)
 
-                    // Sleep hint in Add sheet
+                    // Sleep hint banner shown when Apple Health has provided bedtime and wake time
                     if let bedtime = manager.sleepBedtime, let wake = manager.sleepWakeTime {
                         SleepHintBanner(bedtime: bedtime, wakeTime: wake)
                     }
 
-                    // Name
+                    // Schedule name text field
                     SheetSection(title: "Schedule Name") {
                         TextField("e.g. Evening Dim", text: $name)
                             .font(.system(size: 16))
@@ -994,7 +1247,7 @@ struct AddScheduleSheet: View {
                             .cornerRadius(12)
                     }
 
-                    // Time
+                    // Wheel-style time picker for selecting the trigger hour and minute
                     SheetSection(title: "Trigger Time") {
                         DatePicker("", selection: $triggerTime, displayedComponents: .hourAndMinute)
                             .datePickerStyle(.wheel)
@@ -1003,7 +1256,7 @@ struct AddScheduleSheet: View {
                             .frame(maxWidth: .infinity)
                     }
 
-                    // Action
+                    // Two-column action grid; selected action is highlighted in green
                     SheetSection(title: "Action") {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                             ForEach(ScheduleAction.allCases, id: \.self) { action in
@@ -1022,7 +1275,8 @@ struct AddScheduleSheet: View {
                         }
                     }
 
-                    // Brightness / colour (only relevant actions)
+                    // Brightness and colour temperature sliders — hidden for Power On and Power Off
+                    // since those actions do not use light-level parameters
                     if selectedAction != .powerOff && selectedAction != .powerOn {
                         SheetSection(title: "Brightness (\(Int(brightness / 255 * 100))%)") {
                             HStack {
@@ -1043,7 +1297,8 @@ struct AddScheduleSheet: View {
                         }
                     }
 
-                    // Days
+                    // Day-of-week repeat selector — circular toggle buttons, Mon through Sun
+                    // If no days are selected the backend defaults to every day (1–7)
                     SheetSection(title: "Repeat") {
                         HStack(spacing: 8) {
                             ForEach(0..<7) { i in
@@ -1072,6 +1327,12 @@ struct AddScheduleSheet: View {
         }
     }
 
+    /// Builds a "NewScheduleRequest" from the current form state and submits it to "ScheduleManager"
+    ///
+    /// Hour and minute are extracted from "triggerTime" via "Calendar.current"; the selected days array is
+    /// converted to a comma-separated string of 1-based integers (1 = Monday)
+    /// If no days are selected, the string defaults to "1,2,3,4,5,6,7" (every day)
+    /// On success the sheet is dismissed; on failure "error" is set to an inline message
     func save() {
         saving = true
         let cal = Calendar.current
@@ -1095,24 +1356,58 @@ struct AddScheduleSheet: View {
 
 // MARK: - Edit Schedule Sheet
 
+/// A modal sheet for modifying an existing schedule, pre-populated with the current schedule values
+///
+/// Mirrors the form layout of "AddScheduleSheet" but submits a PATCH request to "/update_schedule"
+/// via "NetworkManager" with the schedule's ID and the updated field values
+///
+/// All state properties are initialised from the existing "BulbSchedule" model in the custom "init",
+/// including parsing the comma-separated "daysOfWeek" string back into the Boolean array used by the picker
 struct EditScheduleSheet: View {
+    /// The existing schedule being edited
     let schedule: BulbSchedule
+
+    /// The identifier of the bulb this schedule belongs to, used to reload the schedule list after saving
     let bulbId: String
 
+    /// The shared schedule manager, observed for sleep data and used to reload schedules after a successful save
     @StateObject private var manager = ScheduleManager.shared
+
+    /// Used to dismiss this sheet after saving or cancelling
     @Environment(\.dismiss) var dismiss
 
+    /// The edited schedule name, pre-populated from "schedule.scheduleName"
     @State private var name: String
+
+    /// The edited action type, pre-populated from "schedule.action"
     @State private var selectedAction: ScheduleAction
+
+    /// The edited trigger time as a "Date", reconstructed from "schedule.triggerHour" and "schedule.triggerMinute"
     @State private var triggerTime: Date
+
+    /// The edited brightness value (0–255), pre-populated from "schedule.brightness"
     @State private var brightness: Double
+
+    /// The edited colour temperature value (0–255), pre-populated from "schedule.colourTemp"
     @State private var colourTemp: Double
+
+    /// The edited repeat days as a Boolean array [Mon…Sun], parsed from "schedule.daysOfWeek"
     @State private var daysSelected: [Bool]
+
+    /// True while the save request is in flight to prevent duplicate submissions
     @State private var saving = false
+
+    /// An inline error message shown when the save request fails
     @State private var error = ""
 
+    /// Single-character day labels for the repeat day selector, Monday through Sunday
     private let dayLabels = ["M","T","W","T","F","S","S"]
 
+    /// Initialises all editable state from the provided "BulbSchedule" model
+    ///
+    /// - Parameters:
+    ///   - schedule: The existing schedule whose values pre-populate the form
+    ///   - bulbId: The identifier of the bulb this schedule belongs to
     init(schedule: BulbSchedule, bulbId: String) {
         self.schedule = schedule
         self.bulbId = bulbId
@@ -1125,7 +1420,7 @@ struct EditScheduleSheet: View {
         _brightness = State(initialValue: Double(schedule.brightness))
         _colourTemp = State(initialValue: Double(schedule.colourTemp))
 
-        // Parse days string into booleans [Mon…Sun] (days are 1-based, 1=Mon)
+        // Parse the comma-separated days string into a [Mon…Sun] Boolean array (days are 1-based, 1 = Monday)
         let activeDays = schedule.daysOfWeek.split(separator: ",").compactMap { Int($0) }
         _daysSelected = State(initialValue: (1...7).map { activeDays.contains($0) })
     }
@@ -1136,7 +1431,7 @@ struct EditScheduleSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
 
-                    // Header
+                    // Header with Cancel, title, and Save buttons
                     HStack {
                         Button("Cancel") { dismiss() }
                             .foregroundColor(.white.opacity(0.5))
@@ -1152,12 +1447,12 @@ struct EditScheduleSheet: View {
                     }
                     .padding(.top, 20)
 
-                    // Sleep hint
+                    // Sleep hint banner shown when Apple Health has provided bedtime and wake time
                     if let bedtime = manager.sleepBedtime, let wake = manager.sleepWakeTime {
                         SleepHintBanner(bedtime: bedtime, wakeTime: wake)
                     }
 
-                    // Name
+                    // Schedule name text field
                     SheetSection(title: "Schedule Name") {
                         TextField("Schedule name", text: $name)
                             .font(.system(size: 16))
@@ -1167,7 +1462,7 @@ struct EditScheduleSheet: View {
                             .cornerRadius(12)
                     }
 
-                    // Time
+                    // Wheel-style time picker for editing the trigger hour and minute
                     SheetSection(title: "Trigger Time") {
                         DatePicker("", selection: $triggerTime, displayedComponents: .hourAndMinute)
                             .datePickerStyle(.wheel)
@@ -1176,7 +1471,7 @@ struct EditScheduleSheet: View {
                             .frame(maxWidth: .infinity)
                     }
 
-                    // Action
+                    // Two-column action grid; selected action is highlighted in green
                     SheetSection(title: "Action") {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                             ForEach(ScheduleAction.allCases, id: \.self) { action in
@@ -1195,7 +1490,7 @@ struct EditScheduleSheet: View {
                         }
                     }
 
-                    // Brightness / colour — shown whenever action uses them
+                    // Brightness and colour temperature sliders — hidden for Power On and Power Off
                     if selectedAction != .powerOff && selectedAction != .powerOn {
                         SheetSection(title: "Brightness (\(Int(brightness / 255 * 100))%)") {
                             HStack {
@@ -1216,7 +1511,7 @@ struct EditScheduleSheet: View {
                         }
                     }
 
-                    // Days
+                    // Day-of-week repeat selector — circular toggle buttons, Mon through Sun
                     SheetSection(title: "Repeat") {
                         HStack(spacing: 8) {
                             ForEach(0..<7) { i in
@@ -1245,6 +1540,12 @@ struct EditScheduleSheet: View {
         }
     }
 
+    /// Extracts the edited form values and submits a PATCH request to "/update_schedule" via "NetworkManager"
+    ///
+    /// Hour and minute are extracted from "triggerTime"; the selected days Boolean array is converted
+    /// to a comma-separated string of 1-based integers; if no days are selected the string defaults to "1,2,3,4,5,6,7"
+    /// On success "ScheduleManager" reloads the schedule list for the bulb and the sheet is dismissed;
+    /// on failure "error" is set to an inline message
     func save() {
         saving = true
         let cal = Calendar.current
@@ -1275,11 +1576,19 @@ struct EditScheduleSheet: View {
     }
 }
 
-// MARK: - Sheet Section helper
+// MARK: - Sheet Section Helper
 
+/// A reusable form section wrapper that renders a small all-caps tracking label above arbitrary content
+///
+/// Used throughout "AddScheduleSheet" and "EditScheduleSheet" to give each form field group
+/// a consistent labelled section heading without repeating the label styling
 struct SheetSection<Content: View>: View {
+    /// The section label text, rendered in uppercase with letter-spacing
     let title: String
+
+    /// The content to render beneath the section label
     @ViewBuilder let content: Content
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title.uppercased())
