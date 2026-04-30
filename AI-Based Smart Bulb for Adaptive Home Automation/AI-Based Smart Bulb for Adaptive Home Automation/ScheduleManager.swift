@@ -402,13 +402,46 @@ class ScheduleManager: NSObject, ObservableObject {
     /// All schedule notification identifiers are prefixed with "sched_" so they can be targeted for removal without affecting other app notifications
     /// Notifications are only registered when autoScheduleEnabled is true and the individual schedule's isEnabled flag is set
     func syncLocalNotifications() {
+        // FIX: Only sync if we actually have schedules to register, or autoSchedule is being
+        // explicitly disabled. This prevents a failed/empty network response from wiping all
+        // notifications off the device — the old code removed everything first, then registered
+        // nothing if schedules was empty (e.g. server offline or first launch on a new device).
         let center = UNUserNotificationCenter.current()
+
+        guard autoScheduleEnabled else {
+            // Auto-scheduling turned off: remove all schedule notifications
+            center.getPendingNotificationRequests { requests in
+                let ids = requests.filter { $0.identifier.hasPrefix("sched_") }.map { $0.identifier }
+                center.removePendingNotificationRequests(withIdentifiers: ids)
+            }
+            return
+        }
+
+        guard !schedules.isEmpty else {
+            // No schedules loaded (network likely failed) — leave existing notifications intact
+            // so the device keeps firing what it already has registered
+            print("ScheduleManager: syncLocalNotifications skipped — schedules list empty, keeping existing triggers")
+            return
+        }
+
         center.getPendingNotificationRequests { requests in
-            // Remove all existing schedule-owned notification requests
-            let ids = requests.filter { $0.identifier.hasPrefix("sched_") }.map { $0.identifier }
-            center.removePendingNotificationRequests(withIdentifiers: ids)
-            guard self.autoScheduleEnabled else { return }
-            // Re-register a notification for each enabled schedule
+            // Build the set of IDs we are about to register
+            var incomingIds = Set<String>()
+            for schedule in self.schedules where schedule.isEnabled {
+                for dayMon in schedule.daysArray {
+                    incomingIds.insert("sched_\(schedule.id)_day\(dayMon)")
+                }
+            }
+
+            // Only remove notifications that are stale (not in the incoming set)
+            // This preserves any trigger that is being re-registered and avoids a
+            // brief window where the device has zero schedule notifications
+            let staleIds = requests
+                .filter { $0.identifier.hasPrefix("sched_") && !incomingIds.contains($0.identifier) }
+                .map { $0.identifier }
+            center.removePendingNotificationRequests(withIdentifiers: staleIds)
+
+            // Register all enabled schedules (UNUserNotificationCenter deduplicates by ID)
             for schedule in self.schedules where schedule.isEnabled {
                 self.registerNotification(for: schedule)
             }
@@ -686,13 +719,18 @@ class ScheduleManager: NSObject, ObservableObject {
             self?.isLoadingSchedules = false
             if case .success(let json) = result,
                let arr = json["schedules"] as? [[String: Any]] {
-                self?.schedules = arr.compactMap { Self.parseSchedule($0) }
+                let parsed = arr.compactMap { Self.parseSchedule($0) }
+                // FIX: On network failure we hit .failure and never reach here, so existing
+                // UNCalendarNotificationTriggers are preserved. On success we always update
+                // (empty array is intentional when user deleted all schedules).
+                self?.schedules = parsed
                 self?.syncLocalNotifications()
-                // Push the updated schedule list to the ESP32 for autonomous execution
-                if let schedules = self?.schedules {
-                    self?.activeBLEManager?.pushAllSchedules(schedules)
+                // Push the updated schedule list to the ESP32 only when there is something to push
+                if !parsed.isEmpty {
+                    self?.activeBLEManager?.pushAllSchedules(parsed)
                 }
             }
+            // On .failure: schedules and notifications are left untouched on this device
         }
     }
 
