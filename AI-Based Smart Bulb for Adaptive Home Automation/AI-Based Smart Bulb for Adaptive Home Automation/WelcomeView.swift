@@ -1,35 +1,32 @@
 // WelcomeView.swift
 // AI-Based Smart Bulb for Adaptive Home Automation
-//
-// The app's landing screen, presented on launch. Displays the app title and
-// provides navigation entry points for user registration and login.
-// Also defines ModernButtonStyle, the shared full-width button style used
-// throughout the authentication flow.
+
+// The app's landing screen, presented on launch. Displays the app title and provides navigation entry points for user registration and login
+// Also defines ModernButtonStyle, the shared full-width button style used throughout the authentication flow
 
 import SwiftUI
 
 // MARK: - Modern Button Style
 
-/// A full-width rounded button style used throughout the authentication flow.
-///
-/// Features a semi-transparent filled background, a subtle grey border, a drop
-/// shadow, and press/hover animations for tactile and visual feedback.
-///
-/// - Parameter backgroundColor: The tint colour applied to the button background.
-///   Opacity is reduced when pressed (0.4) and at rest (0.65).
+/// A full-width rounded button style used throughout the authentication flow
+
+/// Features a semi-transparent filled background, a subtle grey border, a drop shadow, and press/hover animations for tactile and visual feedback
+
+/// - Parameter backgroundColor: The tint colour applied to the button background
+///   Opacity is reduced when pressed (0.4) and at rest (0.65)
 struct ModernButtonStyle: ButtonStyle {
 
-    /// The tint colour of the button background.
+    /// The tint colour of the button background
     var backgroundColor: Color
 
-    /// Tracks hover state on macOS to apply a slight scale-up effect.
+    /// Tracks hover state on macOS to apply a slight scale-up effect
     @State private var isHovered = false
 
-    /// Builds the styled button body.
-    ///
-    /// - Opacity drops from 0.65 → 0.4 when pressed.
-    /// - Scale shrinks from 1.0 → 0.97 when pressed.
-    /// - On macOS, scale grows to 1.02 when hovered.
+    /// Builds the styled button body
+    
+    /// - Opacity drops from 0.65 → 0.4 when pressed
+    /// - Scale shrinks from 1.0 → 0.97 when pressed
+    /// - On macOS, scale grows to 1.02 when hovered
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding()
@@ -60,11 +57,10 @@ struct ModernButtonStyle: ButtonStyle {
 
 // MARK: - Welcome View
 
-/// The root landing screen presented when the app launches.
-///
-/// Displays the app title over a soft purple-to-blue linear gradient background,
-/// with two navigation buttons leading to the registration and login flows.
-/// `WelcomeView` owns the root `NavigationStack` for the authentication journey.
+/// The root landing screen presented when the app launches
+
+/// Displays the app title over a soft purple-to-blue linear gradient background, with two navigation buttons leading to the registration and login flows
+/// "WelcomeView" owns the root "NavigationStack" for the authentication journey
 struct WelcomeView: View {
 
     var body: some View {

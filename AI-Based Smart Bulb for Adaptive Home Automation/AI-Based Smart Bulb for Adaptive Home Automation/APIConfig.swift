@@ -9,7 +9,7 @@ import Foundation
 struct APIConfig {
 
     /// The base URL of the Flask backend server
-    
+     
     /// Simulator: points to localhost (127.0.0.1:5000) since the simulator shares the Mac's network stack
     /// Physical device: points to the public ngrok tunnel URL, which forwards traffic to the local Flask server running on port 5000
     /// Update this URL whenever a new ngrok session is started

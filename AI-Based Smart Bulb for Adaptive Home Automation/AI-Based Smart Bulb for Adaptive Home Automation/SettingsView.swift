@@ -1,33 +1,29 @@
 // SettingsView.swift
 // AI-Based Smart Bulb for Adaptive Home Automation
-//
-// Presents app-level settings to the user. Currently exposes the Simulator Mode
-// toggle, which switches between real ESP32 Bluetooth hardware and a fully
-// simulated bulb environment for development and testing.
+
+// Presents app-level settings to the user
+// Currently exposes the Simulator Mode toggle, which switches between real ESP32 Bluetooth hardware and a fully simulated bulb environment for development and testing
 
 import SwiftUI
 
-/// The settings screen, presented modally from `HomeView`.
-///
+/// The settings screen, presented modally from "HomeView"
+
 /// Allows the user to toggle Simulator Mode on or off. When the toggle changes:
-/// - The new value is immediately persisted to `UserDefaults`.
-/// - A `SimulatorModeChanged` notification is broadcast via `NotificationCenter`
-///   so that all active `BLEManager` instances can react accordingly.
-///
-/// When Simulator Mode is off, a Bluetooth information panel is shown to guide
-/// the user through connecting real ESP32 hardware. The currently logged-in
-/// user's email is displayed at the bottom of the screen.
-///
-/// Simulator Mode defaults to `true` on first launch so the app is immediately
-/// usable without physical hardware.
+/// - The new value is immediately persisted to "UserDefaults"
+/// - A "SimulatorModeChanged" notification is broadcast via "NotificationCenter" so that all active "BLEManager" instances can react accordingly
+
+/// When Simulator Mode is off, a Bluetooth information panel is shown to guide the user through connecting real ESP32 hardware
+/// The currently logged-in user's email is displayed at the bottom of the screen
+
+/// Simulator Mode defaults to "true" on first launch so the app is immediately usable without physical hardware
 struct SettingsView: View {
 
     // MARK: - State
 
-    /// The current state of the Simulator Mode toggle, persisted in `UserDefaults`.
+    /// The current state of the Simulator Mode toggle, persisted in "UserDefaults"
     @State private var simulatorMode: Bool = true
 
-    /// Used to dismiss this view and return to `HomeView`.
+    /// Used to dismiss this view and return to "HomeView"
     @Environment(\.dismiss) var dismiss
 
     // MARK: - Body
@@ -48,8 +44,8 @@ struct SettingsView: View {
 
             VStack(spacing: 20) {
 
-                // ── Header ─────────────────────────────────────────────────
-                // Circular dismiss button (✕) aligned to the leading edge.
+                // Header
+                // Circular dismiss button (✕) aligned to the leading edge
                 HStack {
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark")
@@ -66,12 +62,11 @@ struct SettingsView: View {
                     .font(.largeTitle)
                     .bold()
 
-                // ── Settings Card ──────────────────────────────────────────
+                // Settings Card
                 VStack(spacing: 0) {
 
-                    // ── Simulator Mode Toggle ──────────────────────────────
-                    // Persists the new value to UserDefaults and broadcasts a
-                    // notification so BLEManager instances update immediately.
+                    // Simulator Mode Toggle
+                    // Persists the new value to UserDefaults and broadcasts a notification so BLEManager instances update immediately
                     HStack {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 8) {
@@ -108,9 +103,8 @@ struct SettingsView: View {
                     Divider()
                         .padding(.leading)
 
-                    // ── About Simulator Mode ───────────────────────────────
-                    // Explains the purpose and behaviour of Simulator Mode
-                    // so the user understands when to enable or disable it.
+                    // About Simulator Mode
+                    // Explains the purpose and behaviour of Simulator Mode so the user understands when to enable or disable it
                     VStack(alignment: .leading, spacing: 12) {
                         Text("About Simulator Mode")
                             .font(.subheadline)
@@ -146,10 +140,8 @@ struct SettingsView: View {
                 .cornerRadius(15)
                 .padding(.horizontal)
 
-                // ── Bluetooth Information Panel ────────────────────────────
-                // Only shown when Simulator Mode is off, reminding the user
-                // that the iOS Simulator does not support Bluetooth and
-                // providing step-by-step instructions for physical device testing.
+                // Bluetooth Information Panel
+                // Only shown when Simulator Mode is off, reminding the user that the iOS Simulator does not support Bluetooth and providing step-by-step instructions for physical device testing
                 if !simulatorMode {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 8) {
@@ -185,9 +177,9 @@ struct SettingsView: View {
 
                 Spacer()
 
-                // ── Logged-In User ─────────────────────────────────────────
-                // Displays the currently logged-in user's email address,
-                // read from UserDefaults. Hidden if no email is stored.
+                // Logged-In User
+                // Displays the currently logged-in user's email address, read from UserDefaults
+                // Hidden if no email is stored
                 if let userEmail = UserDefaults.standard.string(forKey: "currentUserEmail") {
                     VStack(spacing: 8) {
                         Text("Logged in as")
@@ -207,9 +199,8 @@ struct SettingsView: View {
         }
         .navigationBarHidden(true)
         .onAppear {
-            // Read the persisted simulator mode preference on every appearance.
-            // If no value has been stored yet (first launch), default to true
-            // so the app is immediately usable without physical hardware.
+            // Read the persisted simulator mode preference on every appearance
+            // If no value has been stored yet (first launch), default to true so the app is immediately usable without physical hardware
             simulatorMode = UserDefaults.standard.bool(forKey: "simulatorMode")
             if UserDefaults.standard.object(forKey: "simulatorMode") == nil {
                 simulatorMode = true
