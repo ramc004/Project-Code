@@ -1,86 +1,85 @@
 // RegisterPasswordView.swift
 // AI-Based Smart Bulb for Adaptive Home Automation
 //
-// Step 2 of the two-step registration flow. Collects the six-digit verification
-// code sent to the user's email and a new password meeting all complexity rules.
-// On successful registration, navigates the user to LoginView.
+// Step 2 of the two-step registration flow
+// Collects the six-digit verification code sent to the user's email and a new password meeting all complexity rules
+// On successful registration, navigates the user to LoginView
 
 import SwiftUI
 import Combine
 
-/// The second step of the user registration flow.
-///
-/// Receives the email address and verification code generated in `RegisterEmailView`.
+/// The second step of the user registration flow
+
+/// Receives the email address and verification code generated in "RegisterEmailView"
 /// The user must:
-/// 1. Enter the six-digit code before it expires (5-minute countdown).
-/// 2. Create a password satisfying all four complexity rules.
-///
-/// The Register button is enabled only when both conditions are met. If the code
-/// expires, a Resend button appears to generate and send a fresh code, resetting
-/// the countdown. On successful registration the user's email is stored in
-/// `UserDefaults` and the view navigates to `LoginView`.
+/// 1. Enter the six-digit code before it expires (5-minute countdown)
+/// 2. Create a password satisfying all four complexity rules
+
+/// The Register button is enabled only when both conditions are met
+/// If the code expires, a Resend button appears to generate and send a fresh code, resetting the countdown
+/// On successful registration the user's email is stored in "UserDefaults" and the view navigates to "LoginView"
 struct RegisterPasswordView: View {
 
     // MARK: - Inputs
 
-    /// The email address carried over from `RegisterEmailView`.
+    /// The email address carried over from "RegisterEmailView"
     var email: String
 
-    /// The six-digit verification code generated and sent in `RegisterEmailView`.
-    /// Declared as `@State` so it can be replaced when the user requests a resend.
+    /// The six-digit verification code generated and sent in "RegisterEmailView"
+    /// Declared as "@State" so it can be replaced when the user requests a resend
     @State var verificationCode: String
 
     // MARK: - State
 
-    /// The code entered by the user in the verification field.
+    /// The code entered by the user in the verification field
     @State private var codeInput = ""
 
-    /// The password entered by the user.
+    /// The password entered by the user
     @State private var password = ""
 
-    /// Whether the password is displayed as plain text or obscured.
+    /// Whether the password is displayed as plain text or obscured
     @State private var showPassword = false
 
-    /// Whether the password meets the minimum length requirement (8+ characters).
+    /// Whether the password meets the minimum length requirement (8+ characters)
     @State private var passwordLengthValid = false
 
-    /// Whether the password contains at least one uppercase letter.
+    /// Whether the password contains at least one uppercase letter
     @State private var passwordUppercaseValid = false
 
-    /// Whether the password contains at least one numeric digit.
+    /// Whether the password contains at least one numeric digit
     @State private var passwordNumberValid = false
 
-    /// Whether the password contains at least one special character.
+    /// Whether the password contains at least one special character
     @State private var passwordSpecialCharValid = false
 
-    /// Whether the entered code matches the expected verification code.
+    /// Whether the entered code matches the expected verification code
     @State private var codeValid = false
 
-    /// Controls navigation to `LoginView` after successful registration.
+    /// Controls navigation to `LoginView` after successful registration
     @State private var navigateToLogin = false
 
-    /// True while the registration request is in flight.
+    /// True while the registration request is in flight
     @State private var registering = false
 
-    /// An error message displayed inline when registration fails.
+    /// An error message displayed inline when registration fails
     @State private var errorMessage = ""
 
-    /// Remaining seconds before the verification code expires (starts at 300 = 5 minutes).
+    /// Remaining seconds before the verification code expires (starts at 300 = 5 minutes)
     @State private var timeRemaining = 300
 
-    /// Whether the countdown timer is currently running.
+    /// Whether the countdown timer is currently running
     @State private var timerActive = true
 
-    /// Whether the verification code has expired (countdown reached zero).
+    /// Whether the verification code has expired (countdown reached zero)
     @State private var codeExpired = false
 
-    /// True while a resend code request is in flight.
+    /// True while a resend code request is in flight
     @State private var resendingCode = false
 
-    /// A brief status message shown after a resend attempt ("New code sent!" or error).
+    /// A brief status message shown after a resend attempt ("New code sent!" or error)
     @State private var resendMessage = ""
 
-    /// A one-second repeating timer used to drive the code expiry countdown.
+    /// A one-second repeating timer used to drive the code expiry countdown
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     // MARK: - Body
@@ -90,12 +89,12 @@ struct RegisterPasswordView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Create Password").font(.largeTitle).bold()
 
-                // ── Verification Code Section ──────────────────────────────
+                // Verification Code Section
                 VStack(alignment: .leading) {
                     Text("Enter 6-digit code sent to \(email)").font(.headline)
 
-                    // Countdown timer display — turns orange below 60 s, red when expired.
-                    // Resend button appears when the code is close to or has expired.
+                    // Countdown timer display, turns orange below 60 s, red when expired
+                    // Resend button appears when the code is close to or has expired
                     HStack {
                         Text(codeExpired ? "Code expired" : "Code expires in: \(formattedTime())")
                             .font(.subheadline)
@@ -117,7 +116,7 @@ struct RegisterPasswordView: View {
                     }
                     .padding(.vertical, 5)
 
-                    // Code input field — numeric only, capped at 6 digits, disabled once expired
+                    // Code input field, numeric only, capped at 6 digits, disabled once expired
                     TextField("6-digit code", text: $codeInput)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.numberPad)
@@ -134,14 +133,14 @@ struct RegisterPasswordView: View {
                             }
                         }
 
-                    // Inline correctness indicator — only shown once the user starts typing
+                    // Inline correctness indicator, only shown once the user starts typing
                     if !codeInput.isEmpty && !codeExpired {
                         Text(codeValid ? "Code correct" : "Code incorrect")
                             .foregroundColor(codeValid ? .green : .red)
                             .bold()
                     }
 
-                    // Resend status message — auto-clears after 3 seconds on success
+                    // Resend status message, auto-clears after 3 seconds on success
                     if !resendMessage.isEmpty {
                         Text(resendMessage)
                             .font(.subheadline)
@@ -150,9 +149,8 @@ struct RegisterPasswordView: View {
                     }
                 }
 
-                // ── Password Field ─────────────────────────────────────────
-                // Toggle between SecureField and TextField to allow the user
-                // to reveal their password while typing.
+                // Password Field
+                // Toggle between SecureField and TextField to allow the user to reveal their password while typing
                 VStack(alignment: .leading) {
                     Text("Password").font(.headline)
                     HStack {
@@ -171,8 +169,8 @@ struct RegisterPasswordView: View {
                     .onChange(of: password) { _ in validatePassword() }
                 }
 
-                // ── Password Rules Checklist ───────────────────────────────
-                // Provides real-time feedback as the user types their password.
+                // Password Rules Checklist
+                // Provides real-time feedback as the user types their password
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Password Rules:").font(.subheadline).bold()
                     Text(passwordLengthValid      ? "✅ At least 8 characters"    : "❌ At least 8 characters")
@@ -187,9 +185,8 @@ struct RegisterPasswordView: View {
                     Text(errorMessage).foregroundColor(.red).bold()
                 }
 
-                // ── Register Button ────────────────────────────────────────
-                // Enabled only when all password rules pass, the code is correct,
-                // the code has not expired, and no request is currently in flight.
+                // Register Button
+                // Enabled only when all password rules pass, the code is correct, the code has not expired, and no request is currently in flight
                 Button(action: registerUser) {
                     Text(registering ? "Registering..." : "Register").frame(maxWidth: .infinity)
                 }
@@ -197,18 +194,18 @@ struct RegisterPasswordView: View {
                 .disabled(!allPasswordRulesValid() || !codeValid || codeExpired || registering)
                 .padding(.top, 20)
 
-                // Hidden NavigationLink — activated programmatically on successful registration
+                // Hidden NavigationLink, activated programmatically on successful registration
                 NavigationLink("", destination: LoginView(), isActive: $navigateToLogin)
             }
             .padding()
         }
         .navigationTitle("Step 2: Password")
-        // Drive the countdown timer — stops when timeRemaining reaches zero
+        // Drive the countdown timer, stops when timeRemaining reaches zero
         .onReceive(timer) { _ in
             if timerActive && timeRemaining > 0 {
                 timeRemaining -= 1
             } else if timeRemaining == 0 {
-                // Code has expired — disable the input field and invalidate the code
+                // Code has expired, disable the input field and invalidate the code
                 codeExpired = true
                 codeValid   = false
                 timerActive = false
@@ -218,9 +215,9 @@ struct RegisterPasswordView: View {
 
     // MARK: - Helpers
 
-    /// Formats `timeRemaining` as a `M:SS` string for the countdown display.
-    ///
-    /// - Returns: A string such as `"4:32"` or `"0:09"`.
+    /// Formats "timeRemaining" as a "M:SS" string for the countdown display
+    
+    /// - Returns: A string such as "4:32" or "0:09"
     func formattedTime() -> String {
         let minutes = timeRemaining / 60
         let seconds = timeRemaining % 60
@@ -229,8 +226,7 @@ struct RegisterPasswordView: View {
 
     // MARK: - Password Validation
 
-    /// Validates the current password against all four complexity rules using
-    /// regular expressions, updating the corresponding boolean state properties.
+    /// Validates the current password against all four complexity rules using regular expressions, updating the corresponding boolean state properties
     func validatePassword() {
         passwordLengthValid      = password.count >= 8
         passwordUppercaseValid   = password.range(of: "[A-Z]",            options: .regularExpression) != nil
@@ -238,18 +234,17 @@ struct RegisterPasswordView: View {
         passwordSpecialCharValid = password.range(of: "[!@#$%^&*()_+{}:<>?]", options: .regularExpression) != nil
     }
 
-    /// Returns `true` only when all four password complexity rules are satisfied.
+    /// Returns "true" only when all four password complexity rules are satisfied
     func allPasswordRulesValid() -> Bool {
         return passwordLengthValid && passwordUppercaseValid && passwordNumberValid && passwordSpecialCharValid
     }
 
     // MARK: - Registration
 
-    /// Submits the email and password to the `/register` endpoint.
-    ///
-    /// On a HTTP 200 response the user's email is persisted to `UserDefaults`
-    /// for session management and the view navigates to `LoginView`. Non-200
-    /// responses display the server's error message inline.
+    /// Submits the email and password to the "/register" endpoint
+    
+    /// On a HTTP 200 response the user's email is persisted to UserDefaults for session management and the view navigates to "LoginView"
+    /// Non-200 responses display the server's error message inline
     func registerUser() {
         registering  = true
         errorMessage = ""
@@ -269,7 +264,7 @@ struct RegisterPasswordView: View {
 
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode == 200 {
-                        // Registration successful — persist email and navigate to login
+                        // Registration successful, persist email and navigate to login
                         UserDefaults.standard.set(email, forKey: "currentUserEmail")
                         navigateToLogin = true
                     } else if let data = data,
@@ -289,12 +284,10 @@ struct RegisterPasswordView: View {
 
     // MARK: - Resend Verification Code
 
-    /// Generates a new six-digit verification code, sends it to the user's email,
-    /// and resets the countdown timer to 5 minutes.
-    ///
-    /// Replaces `verificationCode` with the newly generated value so subsequent
-    /// comparisons in the code input field use the latest code. The resend status
-    /// message auto-clears after 3 seconds on success.
+    /// Generates a new six-digit verification code, sends it to the user's email, and resets the countdown timer to 5 minutes
+    
+    /// Replaces "verificationCode" with the newly generated value so subsequent comparisons in the code input field use the latest code
+    /// The resend status message auto-clears after 3 seconds on success
     func resendVerificationCode() {
         resendingCode    = true
         resendMessage    = ""

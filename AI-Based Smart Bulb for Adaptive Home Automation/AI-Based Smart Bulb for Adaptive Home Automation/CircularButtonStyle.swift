@@ -1,37 +1,34 @@
 // CircularButtonStyle.swift
 // AI-Based Smart Bulb for Adaptive Home Automation
 //
-// Defines a reusable circular icon button style used throughout the app's
-// navigation headers and action areas.
+// Defines a reusable circular icon button style used throughout the app's navigation headers and action areas
 
 import SwiftUI
 
-/// A custom `ButtonStyle` that renders a fixed-size circular button with
-/// a drop shadow and press animations.
-///
-/// Used across the app wherever a compact circular icon button is needed,
-/// such as the dismiss (✕) button in `SettingsView`.
-///
+/// A custom "ButtonStyle" that renders a fixed-size circular button with a drop shadow and press animations
+
+/// Used across the app wherever a compact circular icon button is needed, such as the dismiss (✕) button in "SettingsView"
+
 /// - Parameters:
-///   - backgroundColor: Fill colour of the circle. Defaults to `.blue`.
-///   - foregroundColor: Colour applied to the button label (icon). Defaults to `.white`.
-///   - size: Diameter of the circle in points. Defaults to `44`.
+///   - backgroundColor: Fill colour of the circle. Defaults to ".blue"
+///   - foregroundColor: Colour applied to the button label (icon), defaults to ".white"
+///   - size: Diameter of the circle in points. Defaults to "44"
 struct CircularIconButtonStyle: ButtonStyle {
 
-    /// Fill colour of the circular button background.
+    /// Fill colour of the circular button background
     var backgroundColor: Color = .blue
 
-    /// Colour of the icon or label rendered inside the button.
+    /// Colour of the icon or label rendered inside the button
     var foregroundColor: Color = .white
 
-    /// Diameter of the circular button in points.
+    /// Diameter of the circular button in points
     var size: CGFloat = 44
 
-    /// Builds the styled button body.
-    ///
+    /// Builds the styled button body
+    
     /// Applies a circular clip, drop shadow, and press animations:
-    /// - Opacity drops from 0.8 → 0.6 when pressed.
-    /// - Scale shrinks from 1.0 → 0.9 when pressed, giving tactile feedback.
+    /// - Opacity drops from 0.8 → 0.6 when pressed
+    /// - Scale shrinks from 1.0 → 0.9 when pressed, giving tactile feedback
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .frame(width: size, height: size)

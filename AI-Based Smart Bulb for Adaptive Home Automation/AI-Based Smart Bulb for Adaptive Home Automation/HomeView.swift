@@ -1,55 +1,51 @@
 // HomeView.swift
 // AI-Based Smart Bulb for Adaptive Home Automation
-//
-// The main dashboard screen, reached after a successful login. Displays the
-// user's saved smart bulbs, filtered by the current Simulator Mode setting.
-// Also defines the SavedBulb model and SavedBulbRowView used throughout the
-// bulb list.
+
+// The main dashboard screen, reached after a successful login
+// Displays the user's saved smart bulbs, filtered by the current Simulator Mode setting
+// Also defines the SavedBulb model and SavedBulbRowView used throughout the bulb list
 
 import SwiftUI
 
-/// The main dashboard view shown after the user logs in.
-///
-/// Fetches and displays the user's saved bulbs from the backend, filtered
-/// to show only simulated or only real bulbs depending on the current
-/// Simulator Mode preference stored in `UserDefaults`.
-///
+/// The main dashboard view shown after the user logs in
+
+/// Fetches and displays the user's saved bulbs from the backend, filtered to show only simulated or only real bulbs depending on the current Simulator Mode preference stored in "UserDefaults"
+
 /// From this screen the user can:
-/// - Navigate to `SavedBulbControlView` to control an individual bulb.
-/// - Navigate to `ScheduleView` to manage timed bulb schedules.
-/// - Navigate to `AddBulbView` to pair a new bulb.
-/// - Navigate to `SettingsView` to toggle Simulator Mode.
-/// - Delete a bulb from their account via a confirmation dialog.
-/// - Log out, which resets the root view to `WelcomeView`.
-///
-/// The bulb list reloads automatically when the view appears, when the user
-/// pulls to refresh, or when a `SimulatorModeChanged` notification is received.
+/// - Navigate to "SavedBulbControlView" to control an individual bulb
+/// - Navigate to "ScheduleView" to manage timed bulb schedules
+/// - Navigate to "AddBulbView" to pair a new bulb
+/// - Navigate to "SettingsView" to toggle Simulator Mode
+/// - Delete a bulb from their account via a confirmation dialog
+/// - Log out, which resets the root view to "WelcomeView"
+
+/// The bulb list reloads automatically when the view appears, when the user pulls to refresh, or when a "SimulatorModeChanged" notification is received
 struct HomeView: View {
 
     // MARK: - State
 
-    /// Controls visibility of the logout confirmation popup.
+    /// Controls visibility of the logout confirmation popup
     @State private var showLogoutPopup = false
 
-    /// The list of saved bulbs fetched from the backend for the current user.
+    /// The list of saved bulbs fetched from the backend for the current user
     @State private var userBulbs: [SavedBulb] = []
 
-    /// True while the bulb list is being fetched from the backend.
+    /// True while the bulb list is being fetched from the backend
     @State private var isLoadingBulbs = false
 
-    /// Whether the Flask backend server is currently reachable.
+    /// Whether the Flask backend server is currently reachable
     @State private var serverOnline = true
 
-    /// An inline error message shown when a network request fails.
+    /// An inline error message shown when a network request fails
     @State private var errorMessage = ""
 
-    /// The bulb selected for deletion, held until the confirmation dialog resolves.
+    /// The bulb selected for deletion, held until the confirmation dialog resolves
     @State private var bulbToDelete: SavedBulb? = nil
 
-    /// Controls visibility of the delete confirmation popup.
+    /// Controls visibility of the delete confirmation popup
     @State private var showDeleteConfirm = false
 
-    /// Used to dismiss this view if needed (e.g. during logout).
+    /// Used to dismiss this view if needed (e.g. during logout)
     @Environment(\.dismiss) var dismiss
 
     // MARK: - Body
@@ -70,11 +66,11 @@ struct HomeView: View {
 
             VStack(alignment: .leading, spacing: 15) {
 
-                // ── Header ─────────────────────────────────────────────────
-                // Left: logout button (arrow). Right: settings and add-bulb buttons.
-                // The add-bulb button is disabled when the server is offline.
+                // Header
+                // Left: logout button (arrow). Right: settings and add-bulb buttons
+                // The add-bulb button is disabled when the server is offline
                 HStack {
-                    // Logout button — tapping shows the confirmation popup
+                    // Logout button, tapping shows the confirmation popup
                     Button(action: { showLogoutPopup = true }) {
                         Image(systemName: "arrow.left")
                             .font(.system(size: 20, weight: .bold))
@@ -83,14 +79,14 @@ struct HomeView: View {
 
                     Spacer()
 
-                    // Settings — navigates to SettingsView
+                    // Settings, navigates to SettingsView
                     NavigationLink(destination: SettingsView()) {
                         Image(systemName: "gearshape.fill")
                             .font(.system(size: 20, weight: .bold))
                     }
                     .buttonStyle(CircularIconButtonStyle(backgroundColor: .purple, foregroundColor: .white))
 
-                    // Add Bulb — disabled when the server is offline
+                    // Add Bulb, disabled when the server is offline
                     NavigationLink(destination: AddBulbView()) {
                         Image(systemName: "plus")
                             .font(.system(size: 20, weight: .bold))
@@ -101,11 +97,11 @@ struct HomeView: View {
                 .padding(.horizontal)
                 .padding(.top, 30)
 
-                // ── Title and Status Badge ─────────────────────────────────
+                // Title and Status Badge
                 // Shows a contextual status badge below the title:
-                // - Red "Server Offline" badge with a Retry button if unreachable.
-                // - Orange "Simulator Mode Active" badge if simulator mode is on.
-                // - A plain welcome message in normal hardware mode.
+                // - Red "Server Offline" badge with a Retry button if unreachable
+                // - Orange "Simulator Mode Active" badge if simulator mode is on
+                // - A plain welcome message in normal hardware mode
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Home Automation")
                         .font(.largeTitle)
@@ -135,7 +131,7 @@ struct HomeView: View {
                         .padding(.horizontal, 12).padding(.vertical, 4)
                         .background(Color.orange.opacity(0.1)).cornerRadius(8)
                     } else {
-                        // Normal hardware mode — plain welcome message
+                        // Normal hardware mode, plain welcome message
                         Text("Welcome! Control your smart bulbs.")
                             .font(.title3).foregroundColor(.gray)
                     }
@@ -143,9 +139,8 @@ struct HomeView: View {
                 .padding(.horizontal)
                 .padding(.top, 20)
 
-                // ── Inline Error Message ───────────────────────────────────
-                // Shown when a request fails for a reason other than the server
-                // being completely offline (e.g. a malformed response).
+                // Inline Error Message
+                // Shown when a request fails for a reason other than the server being completely offline (e.g. a malformed response)
                 if !errorMessage.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "exclamationmark.circle.fill").foregroundColor(.red)
@@ -155,7 +150,7 @@ struct HomeView: View {
                     .background(Color.red.opacity(0.1)).cornerRadius(8).padding(.horizontal)
                 }
 
-                // ── Bulb List / Empty State ────────────────────────────────
+                // Bulb List / Empty State
                 if isLoadingBulbs {
                     // Loading indicator while the bulb list is being fetched
                     Spacer()
@@ -167,7 +162,7 @@ struct HomeView: View {
                     Spacer()
 
                 } else if userBulbs.isEmpty {
-                    // Empty state — icon and message vary based on server status
+                    // Empty state, icon and message vary based on server status
                     Spacer()
                     VStack(spacing: 20) {
                         Image(systemName: serverOnline ? "lightbulb.slash" : "wifi.slash")
@@ -203,7 +198,7 @@ struct HomeView: View {
                                     }
                                     .buttonStyle(PlainButtonStyle())
 
-                                    // Schedule shortcut — navigates to ScheduleView for this bulb
+                                    // Schedule shortcut, navigates to ScheduleView for this bulb
                                     NavigationLink(destination: ScheduleView(bulbId: bulb.bulb_id, bulbName: bulb.bulb_name)) {
                                         Image(systemName: "calendar.badge.clock")
                                             .font(.system(size: 18))
@@ -214,7 +209,7 @@ struct HomeView: View {
                                             .shadow(color: Color.black.opacity(0.15), radius: 4, x: 0, y: 2)
                                     }
 
-                                    // Delete button — stores the target bulb and shows the confirmation popup
+                                    // Delete button, stores the target bulb and shows the confirmation popup
                                     Button(action: {
                                         bulbToDelete = bulb
                                         showDeleteConfirm = true
@@ -236,9 +231,8 @@ struct HomeView: View {
                 }
             }
 
-            // ── Logout Confirmation Popup ──────────────────────────────────
-            // Modal overlay asking the user to confirm before logging out.
-            // "Yes" clears the session and resets the root view to WelcomeView.
+            // Logout Confirmation Popup
+            // Modal overlay asking the user to confirm before logging out "Yes" clears the session and resets the root view to WelcomeView
             if showLogoutPopup {
                 ZStack {
                     Color.black.opacity(0.3).ignoresSafeArea()
@@ -257,9 +251,9 @@ struct HomeView: View {
                 }
             }
 
-            // ── Delete Confirmation Popup ──────────────────────────────────
-            // Modal overlay asking the user to confirm before removing a bulb
-            // from their account. Includes the bulb name for clarity.
+            // Delete Confirmation Popup
+            // Modal overlay asking the user to confirm before removing a bulb from their account
+            // Includes the bulb name for clarity
             if showDeleteConfirm, let bulb = bulbToDelete {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
@@ -309,13 +303,11 @@ struct HomeView: View {
 
     // MARK: - Load Bulbs
 
-    /// Fetches the current user's saved bulbs from the `/get_bulbs` endpoint,
-    /// filtered by the active Simulator Mode preference.
-    ///
-    /// If no `simulatorMode` key exists in `UserDefaults` (first launch), it is
-    /// initialised to `true` so the app defaults to simulator mode. The fetched
-    /// bulbs are decoded into `SavedBulb` values and stored in `userBulbs`.
-    /// On failure, `userBulbs` is cleared and an appropriate error is shown.
+    /// Fetches the current user's saved bulbs from the "/get_bulbs" endpoint, filtered by the active Simulator Mode preference
+    
+    /// If no "simulatorMode" key exists in "UserDefaults" (first launch), it is initialised to "true" so the app defaults to simulator mode
+    /// The fetched bulbs are decoded into "SavedBulb" values and stored in "userBulbs"
+    /// On failure, "userBulbs" is cleared and an appropriate error is shown
     func loadUserBulbs() {
         guard let userEmail = UserDefaults.standard.string(forKey: "currentUserEmail") else { return }
         isLoadingBulbs = true
@@ -363,13 +355,12 @@ struct HomeView: View {
 
     // MARK: - Delete Bulb
 
-    /// Removes the specified bulb from the current user's account via the
-    /// `/delete_bulb` endpoint, then removes it from `userBulbs` locally on success.
-    ///
-    /// Dismisses the delete confirmation popup and clears `bulbToDelete` regardless
-    /// of the outcome. On failure, an error message is displayed inline.
-    ///
-    /// - Parameter bulb: The `SavedBulb` to remove.
+    /// Removes the specified bulb from the current user's account via the "/delete_bulb" endpoint, then removes it from "userBulbs" locally on success
+    
+    /// Dismisses the delete confirmation popup and clears "bulbToDelete" regardless of the outcome
+    /// On failure, an error message is displayed inline
+    
+    /// - Parameter bulb: The "SavedBulb" to remove
     func deleteBulb(_ bulb: SavedBulb) {
         guard let userEmail = UserDefaults.standard.string(forKey: "currentUserEmail") else { return }
         NetworkManager.shared.post(
@@ -389,10 +380,9 @@ struct HomeView: View {
 
     // MARK: - Logout
 
-    /// Logs the user out by replacing the root view controller with a fresh
-    /// `WelcomeView`, effectively clearing the entire navigation stack.
-    ///
-    /// Uses a cross-dissolve transition for a smooth visual handoff.
+    /// Logs the user out by replacing the root view controller with a fresh "WelcomeView", effectively clearing the entire navigation stack
+    
+    /// Uses a cross-dissolve transition for a smooth visual handoff
     func navigateToRootView() {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let window = windowScene.windows.first else { return }
@@ -404,37 +394,36 @@ struct HomeView: View {
 
 // MARK: - SavedBulb Model
 
-/// A lightweight model representing a bulb saved to the user's account on the backend.
-///
-/// Conforms to `Identifiable` so it can be used directly in SwiftUI `ForEach` loops.
+/// A lightweight model representing a bulb saved to the user's account on the backend
+
+/// Matches to "Identifiable" so it can be used directly in SwiftUI "ForEach" loops
 struct SavedBulb: Identifiable {
 
-    /// A locally generated unique identifier for use in SwiftUI list rendering.
+    /// A locally generated unique identifier for use in SwiftUI list rendering
     let id = UUID()
 
-    /// The unique identifier assigned to the bulb by the backend database.
+    /// The unique identifier assigned to the bulb by the backend database
     let bulb_id: String
 
-    /// The user-assigned display name of the bulb (e.g. "Bedroom Bulb").
+    /// The user-assigned display name of the bulb (e.g. "Bedroom Bulb")
     let bulb_name: String
 
-    /// The optional room the bulb has been assigned to (e.g. "Living Room").
+    /// The optional room the bulb has been assigned to (e.g. "Living Room")
     let room_name: String?
 
-    /// Whether this bulb is a simulated device rather than real ESP32 hardware.
+    /// Whether this bulb is a simulated device rather than real ESP32 hardware
     let is_simulated: Bool
 }
 
 // MARK: - SavedBulbRowView
 
-/// A row view displaying a single saved bulb's name, room, and simulated status.
-///
-/// Used inside the `ForEach` loop in `HomeView`. Real bulbs show a plain
-/// lightbulb icon; simulated bulbs display an orange play-badge overlay
-/// and an "Simulated" label beneath the bulb name.
+/// A row view displaying a single saved bulb's name, room, and simulated status
+
+/// Used inside the "ForEach" loop in "HomeView"
+/// Real bulbs show a plain lightbulb icon; simulated bulbs display an orange play-badge overlay and an "Simulated" label beneath the bulb name
 struct SavedBulbRowView: View {
 
-    /// The bulb to display in this row.
+    /// The bulb to display in this row
     let bulb: SavedBulb
 
     var body: some View {
